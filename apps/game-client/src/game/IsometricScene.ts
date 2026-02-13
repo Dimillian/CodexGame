@@ -82,8 +82,7 @@ const ZOOM_STEP = 0.12;
 const CAMERA_PAN_SPEED = 460;
 const HOVER_OFFSET_X = 12;
 const HOVER_OFFSET_Y = 12;
-const HOVER_PADDING = 6;
-const HOVER_DEPTH = 10000;
+const HOVER_MARGIN = 6;
 
 type CameraKeys = {
   up: Phaser.Input.Keyboard.Key;
@@ -140,8 +139,7 @@ export class IsometricScene extends Phaser.Scene {
   private snapshot: IsoSnapshot | null = null;
   private cameraKeys: CameraKeys | null = null;
   private cameraFollowActor = true;
-  private hoverBackground: Phaser.GameObjects.Rectangle | null = null;
-  private hoverText: Phaser.GameObjects.Text | null = null;
+  private hoverElement: HTMLDivElement | null = null;
 
   public constructor() {
     super("world");
@@ -158,6 +156,7 @@ export class IsometricScene extends Phaser.Scene {
   public create(): void {
     this.cameras.main.setBackgroundColor("#10161f");
     this.cameras.main.setZoom(DEFAULT_ZOOM);
+    this.ensureDomTooltip();
 
     const keys = this.input.keyboard?.addKeys({
       up: Phaser.Input.Keyboard.KeyCodes.UP,
@@ -178,6 +177,8 @@ export class IsometricScene extends Phaser.Scene {
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.input.off("wheel", this.onWheelZoom, this);
       this.input.off("pointerdown", this.onMapPointerDown, this);
+      this.hoverElement?.remove();
+      this.hoverElement = null;
     });
   }
 
@@ -275,68 +276,77 @@ export class IsometricScene extends Phaser.Scene {
     camera.scrollX += worldBefore.x - worldAfter.x;
     camera.scrollY += worldBefore.y - worldAfter.y;
     this.cameraFollowActor = false;
+    this.positionHover(pointer);
   }
 
-  private ensureHoverUi(): void {
-    if (this.hoverBackground && this.hoverText) {
-      return;
+  private ensureDomTooltip(): HTMLDivElement | null {
+    if (this.hoverElement) {
+      return this.hoverElement;
+    }
+    const parent = this.game.canvas.parentElement;
+    if (!parent) {
+      return null;
     }
 
-    const background = this.add.rectangle(0, 0, 0, 0, 0x07101b, 0.9);
-    background.setOrigin(0, 0);
-    background.setStrokeStyle(1, 0xffffff, 0.2);
-    background.setScrollFactor(0);
-    background.setDepth(HOVER_DEPTH);
-    background.setVisible(false);
+    const computed = window.getComputedStyle(parent);
+    if (computed.position === "static") {
+      parent.style.position = "relative";
+    }
 
-    const text = this.add.text(0, 0, "", {
-      fontFamily: "\"SF Pro Text\", \"Avenir Next\", \"Segoe UI\", sans-serif",
-      fontSize: "11px",
-      color: "#f3eadf",
-      lineSpacing: 2
-    });
-    text.setScrollFactor(0);
-    text.setDepth(HOVER_DEPTH + 1);
-    text.setVisible(false);
+    const tooltip = document.createElement("div");
+    tooltip.style.position = "absolute";
+    tooltip.style.left = "0";
+    tooltip.style.top = "0";
+    tooltip.style.transform = "translate(-9999px, -9999px)";
+    tooltip.style.pointerEvents = "none";
+    tooltip.style.zIndex = "20";
+    tooltip.style.padding = "6px 8px";
+    tooltip.style.borderRadius = "6px";
+    tooltip.style.border = "1px solid rgba(255, 255, 255, 0.2)";
+    tooltip.style.background = "rgba(7, 16, 27, 0.92)";
+    tooltip.style.color = "#f3eadf";
+    tooltip.style.font = "11px \"SF Pro Text\", \"Avenir Next\", \"Segoe UI\", sans-serif";
+    tooltip.style.lineHeight = "1.3";
+    tooltip.style.whiteSpace = "pre";
+    tooltip.style.display = "none";
 
-    this.hoverBackground = background;
-    this.hoverText = text;
+    parent.appendChild(tooltip);
+    this.hoverElement = tooltip;
+    return tooltip;
   }
 
   private showHover(pointer: Phaser.Input.Pointer, lines: string[]): void {
-    this.ensureHoverUi();
-    if (!this.hoverBackground || !this.hoverText) {
+    const tooltip = this.ensureDomTooltip();
+    if (!tooltip) {
       return;
     }
-
-    this.hoverText.setText(lines.join("\n"));
-    this.hoverText.setVisible(true);
-    this.hoverBackground.setVisible(true);
+    tooltip.textContent = lines.join("\n");
+    tooltip.style.display = "block";
     this.positionHover(pointer);
   }
 
   private positionHover(pointer: Phaser.Input.Pointer): void {
-    if (!this.hoverBackground || !this.hoverText || !this.hoverText.visible) {
+    const tooltip = this.hoverElement;
+    if (!tooltip || tooltip.style.display === "none") {
       return;
     }
-
-    const width = this.hoverText.width + HOVER_PADDING * 2;
-    const height = this.hoverText.height + HOVER_PADDING * 2;
+    const width = tooltip.offsetWidth;
+    const height = tooltip.offsetHeight;
     let x = pointer.x + HOVER_OFFSET_X;
     let y = pointer.y + HOVER_OFFSET_Y;
-    const maxX = this.scale.width - width - 6;
-    const maxY = this.scale.height - height - 6;
-    x = Phaser.Math.Clamp(x, 6, Math.max(6, maxX));
-    y = Phaser.Math.Clamp(y, 6, Math.max(6, maxY));
-
-    this.hoverBackground.setPosition(x, y);
-    this.hoverBackground.setSize(width, height);
-    this.hoverText.setPosition(x + HOVER_PADDING, y + HOVER_PADDING);
+    const maxX = this.scale.width - width - HOVER_MARGIN;
+    const maxY = this.scale.height - height - HOVER_MARGIN;
+    x = Phaser.Math.Clamp(x, HOVER_MARGIN, Math.max(HOVER_MARGIN, maxX));
+    y = Phaser.Math.Clamp(y, HOVER_MARGIN, Math.max(HOVER_MARGIN, maxY));
+    tooltip.style.transform = `translate(${x}px, ${y}px)`;
   }
 
   private hideHover(): void {
-    this.hoverBackground?.setVisible(false);
-    this.hoverText?.setVisible(false);
+    if (!this.hoverElement) {
+      return;
+    }
+    this.hoverElement.style.display = "none";
+    this.hoverElement.style.transform = "translate(-9999px, -9999px)";
   }
 
   private attachHover(target: Phaser.GameObjects.GameObject, lines: string[]): void {
@@ -430,10 +440,8 @@ export class IsometricScene extends Phaser.Scene {
       return;
     }
 
-    this.hoverBackground = null;
-    this.hoverText = null;
+    this.hideHover();
     this.children.removeAll();
-    this.ensureHoverUi();
 
     const centerX = this.scale.width * 0.5;
     const centerY = 70;

@@ -1,6 +1,6 @@
 {
-  "seed": 233211947,
-  "tick": 110,
+  "seed": 538321387,
+  "tick": 20,
   "actor": {
     "id": "agent-1",
     "x": 20,
@@ -9,14 +9,14 @@
     "stamina": 100
   },
   "threadIds": {
-    "gameplay": "019c57f8-485d-7380-b4f9-b04a6fb7652d",
-    "builder": "019c57f8-4a5c-7a23-889c-01beac843683"
+    "gameplay": "019c57fd-b211-7e11-8ffa-5bcaff0ab0f9",
+    "builder": "019c57fd-b486-7023-8399-167addc9d5e9"
   },
   "metrics": {
-    "turnsTotal": 1,
+    "turnsTotal": 0,
     "invalidOutputCount": 0,
     "actionAppliedCount": 0,
     "actionRejectedCount": 0,
-    "queuedActions": 4
+    "queuedActions": 0
   }
 }
