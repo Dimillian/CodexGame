@@ -7,3 +7,4 @@ coverage
 *.log
 apps/game-runtime/.runtime
 data/replay/
+data/runtime/session.json
