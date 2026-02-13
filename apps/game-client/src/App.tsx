@@ -156,6 +156,7 @@ export default function App() {
           return;
         case "world.snapshot": {
           const nextSnapshot: IsoSnapshot = {
+            seed: message.payload.world.seed,
             tiles: message.payload.world.tiles,
             entities: message.payload.world.entities,
             actor: {
