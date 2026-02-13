@@ -1,0 +1,22 @@
+{
+  "seed": 119320304,
+  "tick": 216,
+  "actor": {
+    "id": "agent-1",
+    "x": 20,
+    "y": 20,
+    "facing": "S",
+    "stamina": 100
+  },
+  "threadIds": {
+    "gameplay": "019c57bd-591c-7f10-b889-7731904e17a3",
+    "builder": "019c57bd-6ed3-7dd3-bba2-a5cf0cea87b7"
+  },
+  "metrics": {
+    "turnsTotal": 6,
+    "invalidOutputCount": 0,
+    "actionAppliedCount": 1,
+    "actionRejectedCount": 23,
+    "queuedActions": 0
+  }
+}

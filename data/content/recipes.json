@@ -1,0 +1,201 @@
+[
+  {
+    "id": "campfire_recipe",
+    "input": [
+      {
+        "item": "wood",
+        "count": 3
+      },
+      {
+        "item": "stone",
+        "count": 2
+      }
+    ],
+    "output": {
+      "item": "campfire",
+      "count": 1
+    }
+  },
+  {
+    "id": "crate_recipe",
+    "input": [
+      {
+        "item": "wood",
+        "count": 4
+      },
+      {
+        "item": "fiber",
+        "count": 2
+      }
+    ],
+    "output": {
+      "item": "crate",
+      "count": 1
+    }
+  },
+  {
+    "id": "totem_recipe",
+    "input": [
+      {
+        "item": "wood",
+        "count": 2
+      },
+      {
+        "item": "stone",
+        "count": 1
+      },
+      {
+        "item": "mushroom",
+        "count": 1
+      }
+    ],
+    "output": {
+      "item": "totem",
+      "count": 1
+    }
+  },
+  {
+    "id": "workbench_recipe",
+    "input": [
+      {
+        "item": "wood",
+        "count": 6
+      },
+      {
+        "item": "stone",
+        "count": 2
+      }
+    ],
+    "output": {
+      "item": "workbench",
+      "count": 1
+    }
+  },
+  {
+    "id": "stone_axe_recipe",
+    "input": [
+      {
+        "item": "wood",
+        "count": 2
+      },
+      {
+        "item": "stone",
+        "count": 3
+      }
+    ],
+    "output": {
+      "item": "stone_axe",
+      "count": 1
+    }
+  },
+  {
+    "id": "stone_hammer_recipe",
+    "input": [
+      {
+        "item": "wood",
+        "count": 3
+      },
+      {
+        "item": "stone",
+        "count": 4
+      }
+    ],
+    "output": {
+      "item": "stone_hammer",
+      "count": 1
+    }
+  },
+  {
+    "id": "wooden_spear_recipe",
+    "input": [
+      {
+        "item": "wood",
+        "count": 3
+      },
+      {
+        "item": "fiber",
+        "count": 2
+      }
+    ],
+    "output": {
+      "item": "wooden_spear",
+      "count": 1
+    }
+  },
+  {
+    "id": "bow_recipe",
+    "input": [
+      {
+        "item": "wood",
+        "count": 4
+      },
+      {
+        "item": "fiber",
+        "count": 4
+      }
+    ],
+    "output": {
+      "item": "bow",
+      "count": 1
+    }
+  },
+  {
+    "id": "fence_recipe",
+    "input": [
+      {
+        "item": "wood",
+        "count": 3
+      },
+      {
+        "item": "fiber",
+        "count": 1
+      }
+    ],
+    "output": {
+      "item": "fence",
+      "count": 1
+    }
+  },
+  {
+    "id": "house_recipe",
+    "input": [
+      {
+        "item": "wood",
+        "count": 12
+      },
+      {
+        "item": "stone",
+        "count": 8
+      },
+      {
+        "item": "fiber",
+        "count": 6
+      }
+    ],
+    "output": {
+      "item": "house",
+      "count": 1
+    }
+  },
+  {
+    "id": "sword_recipe",
+    "input": [
+      {
+        "item": "wood",
+        "count": 4
+      },
+      {
+        "item": "stone",
+        "count": 2
+      },
+      {
+        "item": "fiber",
+        "count": 1
+      }
+    ],
+    "output": {
+      "item": "sword",
+      "count": 1
+    }
+  }
+]

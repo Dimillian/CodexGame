@@ -1,0 +1,42 @@
+{
+  "biomeRules": [
+    {
+      "id": "forest-wood",
+      "biome": "forest",
+      "resource": "wood",
+      "baseChance": 0.5
+    },
+    {
+      "id": "mountain-stone",
+      "biome": "mountain",
+      "resource": "stone",
+      "baseChance": 0.45
+    },
+    {
+      "id": "plains-fiber",
+      "biome": "plains",
+      "resource": "fiber",
+      "baseChance": 0.4
+    },
+    {
+      "id": "forest-mushroom",
+      "biome": "forest",
+      "resource": "mushroom",
+      "baseChance": 0.08
+    }
+  ],
+  "spawnRules": [
+    {
+      "id": "wolf",
+      "entity": "wolf",
+      "biome": "forest",
+      "baseChance": 0.05
+    },
+    {
+      "id": "slime",
+      "entity": "slime",
+      "biome": "plains",
+      "baseChance": 0.06
+    }
+  ]
+}

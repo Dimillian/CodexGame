@@ -1,0 +1,68 @@
+[
+  {
+    "id": "campfire",
+    "name": "Campfire",
+    "kind": "structure",
+    "walkable": false
+  },
+  {
+    "id": "crate",
+    "name": "Crate",
+    "kind": "structure",
+    "walkable": false
+  },
+  {
+    "id": "totem",
+    "name": "Totem",
+    "kind": "structure",
+    "walkable": false
+  },
+  {
+    "id": "workbench",
+    "name": "Workbench",
+    "kind": "structure",
+    "walkable": false
+  },
+  {
+    "id": "house",
+    "name": "House",
+    "kind": "structure",
+    "walkable": false
+  },
+  {
+    "id": "fence",
+    "name": "Fence",
+    "kind": "structure",
+    "walkable": false
+  },
+  {
+    "id": "stone_axe",
+    "name": "Stone Axe",
+    "kind": "tool",
+    "walkable": true
+  },
+  {
+    "id": "stone_hammer",
+    "name": "Stone Hammer",
+    "kind": "tool",
+    "walkable": true
+  },
+  {
+    "id": "wooden_spear",
+    "name": "Wooden Spear",
+    "kind": "weapon",
+    "walkable": true
+  },
+  {
+    "id": "bow",
+    "name": "Bow",
+    "kind": "weapon",
+    "walkable": true
+  },
+  {
+    "id": "sword",
+    "name": "Sword",
+    "kind": "weapon",
+    "walkable": true
+  }
+]

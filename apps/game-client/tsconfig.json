@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "types": ["node", "vite/client"],
+    "outDir": "dist",
+    "rootDir": "."
+  },
+  "include": ["src", "vite.config.ts"]
+}
