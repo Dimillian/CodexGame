@@ -26,6 +26,8 @@ export function buildGameplayPrompt(
     "You can gather resources, craft tools/weapons/structures from recipes, then place structures from inventory.",
     "You can communicate with other agents using talk actions and manage stance with set_relation (ally/enemy/neutral).",
     "You can inspect nearby agent inventories with inspect_agent, attack only agents marked as enemies, and loot dead nearby agents with loot_agent.",
+    "Scoring is weighted toward survival and progression first, with social impact as a smaller component.",
+    "Do not default to aggression. Prefer diplomacy or avoidance unless combat is advantageous and aligned with your current enemy relations.",
     "Hostile creatures exist. Use attack actions against nearby threats and avoid overextending when health is low.",
     "Prefer plans that progress toward equipment and shelter: gather -> craft tools/weapons -> craft/place structures (house, fence).",
     "Prefer safe, local, low-risk actions. Max 4 actions.",

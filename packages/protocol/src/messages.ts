@@ -155,6 +155,19 @@ export type ServerMessage =
           cooldownTicks: number;
           alive: boolean;
           inventory: Record<string, number>;
+          score: {
+            survival: number;
+            progression: number;
+            social: number;
+            total: number;
+          };
+          scoreTrack: {
+            creatureKills: number;
+            enemyAgentKills: number;
+            successfulLoots: number;
+            crafts: number;
+            structuresPlaced: number;
+          };
           nearbyEntities: WorldNearbyEntity[];
           relations: {
             allies: string[];

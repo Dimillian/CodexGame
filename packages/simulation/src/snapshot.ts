@@ -56,6 +56,8 @@ export function buildSnapshot(state: SimulationState): WorldSnapshot {
         cooldownTicks: agent.cooldownTicks,
         alive: agent.alive,
         inventory: { ...agent.inventory },
+        score: { ...agent.score },
+        scoreTrack: { ...agent.scoreTrack },
         knownPeerInventories: Object.fromEntries(
           Object.entries(agent.knownAgentInventories).map(([id, snapshot]) => [
             id,
@@ -111,6 +113,18 @@ export function buildPromptContext(snapshot: WorldSnapshot, agentId: string): st
     {
       tick: snapshot.tick,
       self: self ?? null,
+      scoreGuidance: {
+        weights: {
+          survival: 0.6,
+          progression: 0.3,
+          social: 0.1
+        },
+        goals: [
+          "Prioritize survival and low-risk positioning.",
+          "Progress by gathering/crafting/placing to improve progression score.",
+          "Use social actions strategically; aggression should be conditional, not default."
+        ]
+      },
       peers,
       recentInbox: (self?.inbox ?? []).slice(-8),
       constraints: {

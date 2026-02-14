@@ -358,6 +358,19 @@ function buildAgentState(config: AgentConfig, x: number, y: number): AgentState 
     maxCooldownTicks: 2,
     alive: true,
     inventory: {},
+    score: {
+      survival: 0,
+      progression: 0,
+      social: 0,
+      total: 0
+    },
+    scoreTrack: {
+      creatureKills: 0,
+      enemyAgentKills: 0,
+      successfulLoots: 0,
+      crafts: 0,
+      structuresPlaced: 0
+    },
     knownAgentInventories: {},
     relations: {},
     inbox: []

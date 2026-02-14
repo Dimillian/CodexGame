@@ -20,6 +20,9 @@ const CREATURE_MOVE_TICK_INTERVAL = 6;
 const CREATURE_ATTACK_TICK_INTERVAL = 12;
 const CREATURE_AGGRO_GRACE_TICKS = 24;
 const MAX_CREATURE_ATTACKERS_PER_TICK = 2;
+const SCORE_SURVIVAL_WEIGHT = 0.6;
+const SCORE_PROGRESSION_WEIGHT = 0.3;
+const SCORE_SOCIAL_WEIGHT = 0.1;
 
 function addInventory(inventory: Record<string, number>, item: string, count: number): void {
   inventory[item] = (inventory[item] ?? 0) + count;
@@ -57,6 +60,49 @@ function hashUnit(seed: number, a: number, b: number, salt: number): number {
 
 function computeDamage(attack: number, defense: number): number {
   return Math.max(1, attack - defense);
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function inventoryCount(inventory: Record<string, number>): number {
+  return Object.values(inventory).reduce((sum, count) => sum + Math.max(0, count), 0);
+}
+
+function scoreRound(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function recomputeAgentScores(state: SimulationState): void {
+  for (const agent of state.agents) {
+    const hpRatio = agent.maxHp > 0 ? agent.hp / agent.maxHp : 0;
+    const survivalBase = agent.alive ? 25 : 0;
+    const survivalHp = hpRatio * 35;
+    const survival = clamp(survivalBase + survivalHp, 0, 60);
+
+    const inventoryProgress = clamp(inventoryCount(agent.inventory), 0, 20);
+    const craftedProgress = clamp(agent.scoreTrack.crafts * 1.5 + agent.scoreTrack.structuresPlaced * 2.5, 0, 10);
+    const progression = clamp(inventoryProgress + craftedProgress, 0, 30);
+
+    const allyNear = state.agents.filter(
+      (other) => other.id !== agent.id && other.alive && agent.relations[other.id] === "ally" && manhattanDistance(agent.x, agent.y, other.x, other.y) <= 2
+    ).length;
+    const enemyNear = state.agents.filter(
+      (other) => other.id !== agent.id && other.alive && agent.relations[other.id] === "enemy" && manhattanDistance(agent.x, agent.y, other.x, other.y) <= 2
+    ).length;
+    const socialEvents = agent.scoreTrack.enemyAgentKills * 4 + agent.scoreTrack.successfulLoots * 2;
+    const socialPositioning = allyNear * 1 - enemyNear * 0.5;
+    const social = clamp(socialEvents + socialPositioning, 0, 10);
+
+    const total = survival * SCORE_SURVIVAL_WEIGHT + progression * SCORE_PROGRESSION_WEIGHT + social * SCORE_SOCIAL_WEIGHT;
+    agent.score = {
+      survival: scoreRound(survival),
+      progression: scoreRound(progression),
+      social: scoreRound(social),
+      total: scoreRound(total)
+    };
+  }
 }
 
 function defaultCreatureCombat(subtype: string): Pick<
@@ -123,6 +169,19 @@ function ensureAgentDefaults(agent: AgentState): AgentState {
       : 0,
     alive: typeof agent.alive === "boolean" ? agent.alive : hp > 0,
     inventory: { ...agent.inventory },
+    score: {
+      survival: scoreRound(clamp(agent.score?.survival ?? 0, 0, 60)),
+      progression: scoreRound(clamp(agent.score?.progression ?? 0, 0, 30)),
+      social: scoreRound(clamp(agent.score?.social ?? 0, 0, 10)),
+      total: scoreRound(clamp(agent.score?.total ?? 0, 0, 100))
+    },
+    scoreTrack: {
+      creatureKills: Number.isFinite(agent.scoreTrack?.creatureKills) ? Math.max(0, Math.floor(agent.scoreTrack.creatureKills)) : 0,
+      enemyAgentKills: Number.isFinite(agent.scoreTrack?.enemyAgentKills) ? Math.max(0, Math.floor(agent.scoreTrack.enemyAgentKills)) : 0,
+      successfulLoots: Number.isFinite(agent.scoreTrack?.successfulLoots) ? Math.max(0, Math.floor(agent.scoreTrack.successfulLoots)) : 0,
+      crafts: Number.isFinite(agent.scoreTrack?.crafts) ? Math.max(0, Math.floor(agent.scoreTrack.crafts)) : 0,
+      structuresPlaced: Number.isFinite(agent.scoreTrack?.structuresPlaced) ? Math.max(0, Math.floor(agent.scoreTrack.structuresPlaced)) : 0
+    },
     knownAgentInventories: Object.fromEntries(
       Object.entries(agent.knownAgentInventories ?? {}).map(([id, snapshot]) => [
         id,
@@ -216,6 +275,8 @@ function cloneState(state: SimulationState): SimulationState {
     agents: state.agents.map((agent) => ({
       ...agent,
       inventory: { ...agent.inventory },
+      score: { ...agent.score },
+      scoreTrack: { ...agent.scoreTrack },
       knownAgentInventories: Object.fromEntries(
         Object.entries(agent.knownAgentInventories ?? {}).map(([id, snapshot]) => [
           id,
@@ -245,6 +306,7 @@ export class Simulation {
   public constructor(seed: number, width: number, height: number, content: ContentSet, agentConfigs: AgentConfig[] = defaultAgents()) {
     this.content = content;
     this.state = createInitialState(seed, width, height, content, agentConfigs);
+    recomputeAgentScores(this.state);
   }
 
   public static fromState(state: SimulationState, content: ContentSet): Simulation {
@@ -275,6 +337,7 @@ export class Simulation {
       }
     }
     this.tickCreatureAi();
+    recomputeAgentScores(this.state);
   }
 
   public applyAction(agentId: string, action: AgentAction): ActionResult {
@@ -337,6 +400,7 @@ export class Simulation {
         if (entity.quantity <= 0) {
           this.state.entities = this.state.entities.filter((item) => item.id !== entity.id);
         }
+        recomputeAgentScores(this.state);
         return { agentId, action, result: "applied" };
       }
       case "attack": {
@@ -358,7 +422,9 @@ export class Simulation {
           agent.stamina = Math.max(0, agent.stamina - ATTACK_STAMINA_COST);
           if (targetCreature.hp <= 0) {
             this.state.entities = this.state.entities.filter((item) => item.id !== targetCreature.id);
+            agent.scoreTrack.creatureKills += 1;
           }
+          recomputeAgentScores(this.state);
           return { agentId, action, result: "applied" };
         }
 
@@ -382,8 +448,12 @@ export class Simulation {
         const damage = computeDamage(agent.attack, targetAgent.defense);
         targetAgent.hp = Math.max(0, targetAgent.hp - damage);
         targetAgent.alive = targetAgent.hp > 0;
+        if (!targetAgent.alive) {
+          agent.scoreTrack.enemyAgentKills += 1;
+        }
         agent.cooldownTicks = agent.maxCooldownTicks;
         agent.stamina = Math.max(0, agent.stamina - ATTACK_STAMINA_COST);
+        recomputeAgentScores(this.state);
         return { agentId, action, result: "applied" };
       }
       case "craft": {
@@ -399,6 +469,8 @@ export class Simulation {
           addInventory(agent.inventory, ingredient.item, -ingredient.count);
         }
         addInventory(agent.inventory, recipe.output.item, recipe.output.count);
+        agent.scoreTrack.crafts += 1;
+        recomputeAgentScores(this.state);
         return { agentId, action, result: "applied" };
       }
       case "place": {
@@ -424,10 +496,13 @@ export class Simulation {
           y: action.y
         });
         this.placementSequence += 1;
+        agent.scoreTrack.structuresPlaced += 1;
+        recomputeAgentScores(this.state);
         return { agentId, action, result: "applied" };
       }
       case "wait": {
         agent.stamina = Math.min(100, agent.stamina + action.ticks * 2);
+        recomputeAgentScores(this.state);
         return { agentId, action, result: "applied" };
       }
       case "talk": {
@@ -446,6 +521,7 @@ export class Simulation {
         if (recipient.inbox.length > 20) {
           recipient.inbox = recipient.inbox.slice(-20);
         }
+        recomputeAgentScores(this.state);
         return { agentId, action, result: "applied" };
       }
       case "set_relation": {
@@ -457,6 +533,7 @@ export class Simulation {
           return { agentId, action, result: "rejected", reason: "cannot_set_self_relation" };
         }
         agent.relations[target.id] = action.relation;
+        recomputeAgentScores(this.state);
         return { agentId, action, result: "applied" };
       }
       case "inspect_agent": {
@@ -475,6 +552,7 @@ export class Simulation {
           inventory: { ...target.inventory },
           tick: this.state.tick
         };
+        recomputeAgentScores(this.state);
         return { agentId, action, result: "applied" };
       }
       case "loot_agent": {
@@ -497,6 +575,8 @@ export class Simulation {
           }
         }
         target.inventory = {};
+        agent.scoreTrack.successfulLoots += 1;
+        recomputeAgentScores(this.state);
         return { agentId, action, result: "applied" };
       }
       default:

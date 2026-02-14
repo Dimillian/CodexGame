@@ -44,6 +44,21 @@ export type Placement = {
   y: number;
 };
 
+export type AgentScore = {
+  survival: number;
+  progression: number;
+  social: number;
+  total: number;
+};
+
+export type AgentScoreTrack = {
+  creatureKills: number;
+  enemyAgentKills: number;
+  successfulLoots: number;
+  crafts: number;
+  structuresPlaced: number;
+};
+
 export type AgentState = {
   id: string;
   name: string;
@@ -60,6 +75,8 @@ export type AgentState = {
   maxCooldownTicks: number;
   alive: boolean;
   inventory: Record<string, number>;
+  score: AgentScore;
+  scoreTrack: AgentScoreTrack;
   knownAgentInventories: Record<
     string,
     {
@@ -137,6 +154,8 @@ export type WorldSnapshot = {
     cooldownTicks: number;
     alive: boolean;
     inventory: Record<string, number>;
+    score: AgentScore;
+    scoreTrack: AgentScoreTrack;
     knownPeerInventories: Record<
       string,
       {
