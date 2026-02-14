@@ -3,9 +3,7 @@ import { Simulation } from "../src/simulation";
 import type { ContentSet } from "../src/types";
 
 const content: ContentSet = {
-  prefabs: [
-    { id: "campfire", name: "Campfire", kind: "structure", walkable: false }
-  ],
+  prefabs: [{ id: "campfire", name: "Campfire", kind: "structure", walkable: false }],
   recipes: [
     {
       id: "campfire_recipe",
@@ -25,8 +23,12 @@ const content: ContentSet = {
 
 describe("simulation_determinism", () => {
   it("produces identical state for same seed and action stream", () => {
-    const a = new Simulation(42, 40, 40, content);
-    const b = new Simulation(42, 40, 40, content);
+    const agents = [
+      { id: "agent-1", name: "Agent 1" },
+      { id: "agent-2", name: "Agent 2" }
+    ];
+    const a = new Simulation(42, 40, 40, content, agents);
+    const b = new Simulation(42, 40, 40, content, agents);
 
     const actions = [
       { type: "move", direction: "E", steps: 2 } as const,
@@ -35,8 +37,8 @@ describe("simulation_determinism", () => {
     ];
 
     for (const action of actions) {
-      a.applyAction(action);
-      b.applyAction(action);
+      a.applyAction("agent-1", action);
+      b.applyAction("agent-1", action);
       a.tick();
       b.tick();
     }

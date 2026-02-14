@@ -44,8 +44,9 @@ export type Placement = {
   y: number;
 };
 
-export type ActorState = {
+export type AgentState = {
   id: string;
+  name: string;
   x: number;
   y: number;
   facing: "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
@@ -59,6 +60,13 @@ export type ActorState = {
   maxCooldownTicks: number;
   alive: boolean;
   inventory: Record<string, number>;
+  relations: Record<string, "ally" | "enemy" | "neutral">;
+  inbox: Array<{ fromAgentId: string; message: string; tick: number }>;
+};
+
+export type AgentConfig = {
+  id: string;
+  name: string;
 };
 
 export type ContentSet = {
@@ -76,10 +84,11 @@ export type SimulationState = {
   tiles: Tile[][];
   entities: WorldEntity[];
   placements: Placement[];
-  actor: ActorState;
+  agents: AgentState[];
 };
 
 export type ActionResult = {
+  agentId: string;
   action: AgentAction;
   result: "accepted" | "applied" | "rejected";
   reason?: string;
@@ -106,11 +115,12 @@ export type WorldSnapshot = {
     entities: WorldEntity[];
     placements: Placement[];
   };
-  actor: {
+  agents: Array<{
     id: string;
+    name: string;
     x: number;
     y: number;
-    facing: ActorState["facing"];
+    facing: AgentState["facing"];
     stamina: number;
     hp: number;
     maxHp: number;
@@ -119,7 +129,13 @@ export type WorldSnapshot = {
     attackRange: number;
     cooldownTicks: number;
     alive: boolean;
-  };
-  inventory: Record<string, number>;
-  nearbyEntities: NearbyEntity[];
+    inventory: Record<string, number>;
+    nearbyEntities: NearbyEntity[];
+    relations: {
+      allies: string[];
+      enemies: string[];
+      neutral: string[];
+    };
+    inbox: Array<{ fromAgentId: string; message: string; tick: number }>;
+  }>;
 };

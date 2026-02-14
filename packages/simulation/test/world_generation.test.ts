@@ -17,15 +17,21 @@ const content: ContentSet = {
   ]
 };
 
+const agents = [
+  { id: "agent-1", name: "Agent 1" },
+  { id: "agent-2", name: "Agent 2" },
+  { id: "agent-3", name: "Agent 3" }
+];
+
 describe("world_generation", () => {
   it("is deterministic for same seed and content", () => {
-    const a = createInitialState(91234, 48, 48, content);
-    const b = createInitialState(91234, 48, 48, content);
+    const a = createInitialState(91234, 48, 48, content, agents);
+    const b = createInitialState(91234, 48, 48, content, agents);
     expect(a).toEqual(b);
   });
 
   it("keeps local biome continuity above random-speckle baseline", () => {
-    const state = createInitialState(1042, 64, 64, content);
+    const state = createInitialState(1042, 64, 64, content, agents);
     let sameNeighborPairs = 0;
     let totalPairs = 0;
     for (let y = 0; y < state.height; y += 1) {
@@ -53,16 +59,18 @@ describe("world_generation", () => {
     expect(continuity).toBeGreaterThan(0.45);
   });
 
-  it("spawns actor on non-water terrain", () => {
-    const state = createInitialState(77001, 50, 50, content);
-    const terrain = state.tiles[state.actor.y]?.[state.actor.x]?.terrain;
-    expect(terrain).not.toBe("water");
+  it("spawns all agents on non-water terrain", () => {
+    const state = createInitialState(77001, 50, 50, content, agents);
+    for (const agent of state.agents) {
+      const terrain = state.tiles[agent.y]?.[agent.x]?.terrain;
+      expect(terrain).not.toBe("water");
+    }
   });
 
   it("spawns creatures at meaningful density across seeds", () => {
     const seeds = [101, 202, 303, 404, 505];
     const counts = seeds.map((seed) => {
-      const state = createInitialState(seed, 64, 64, content);
+      const state = createInitialState(seed, 64, 64, content, agents);
       return state.entities.filter((entity) => entity.type === "creature").length;
     });
     const average = counts.reduce((sum, count) => sum + count, 0) / counts.length;
@@ -70,11 +78,11 @@ describe("world_generation", () => {
     expect(Math.min(...counts)).toBeGreaterThan(2);
   });
 
-  it("does not spawn creatures too close to the actor at world creation", () => {
-    const state = createInitialState(88001, 64, 64, content);
+  it("does not spawn creatures too close to any agent at world creation", () => {
+    const state = createInitialState(88001, 64, 64, content, agents);
     const distances = state.entities
       .filter((entity) => entity.type === "creature")
-      .map((entity) => Math.abs(entity.x - state.actor.x) + Math.abs(entity.y - state.actor.y));
+      .flatMap((entity) => state.agents.map((agent) => Math.abs(entity.x - agent.x) + Math.abs(entity.y - agent.y)));
 
     const nearest = distances.length > 0 ? Math.min(...distances) : Infinity;
     expect(nearest).toBeGreaterThan(8);

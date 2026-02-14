@@ -19,10 +19,19 @@ export type RuntimeModelOption = {
   defaultReasoningEffort: string | null;
   isDefault: boolean;
 };
+
+export type SessionAgentConfig = {
+  id: string;
+  name: string;
+  model?: string | undefined;
+  effort?: TurnEffort | undefined;
+};
+
 export type SessionStartPayload = {
   seed?: number | undefined;
   model?: string | undefined;
   effort?: TurnEffort | undefined;
+  agents: SessionAgentConfig[];
 };
 
 export type ClientMessage =
@@ -34,7 +43,7 @@ export type ClientMessage =
   | {
       version: Version;
       type: "god.send";
-      payload: { text: string };
+      payload: { text: string; targetAgentId?: string | undefined };
     }
   | {
       version: Version;
@@ -106,7 +115,7 @@ export type ServerMessage =
         phase: SessionPhase;
         paused: boolean;
         preparedSeed: number | null;
-        threadIds: { gameplay?: string; builder?: string };
+        threadIds: { gameplayByAgentId: Record<string, string>; builder?: string };
         connected: boolean;
         runtime: {
           model: string | null;
@@ -131,8 +140,9 @@ export type ServerMessage =
           entities: Array<WorldResourceEntityMessage | WorldCreatureEntityMessage>;
           placements: Array<{ id: string; prefabId: string; x: number; y: number }>;
         };
-        actor: {
+        agents: Array<{
           id: string;
+          name: string;
           x: number;
           y: number;
           facing: string;
@@ -144,9 +154,21 @@ export type ServerMessage =
           attackRange: number;
           cooldownTicks: number;
           alive: boolean;
-        };
-        inventory: Record<string, number>;
-        nearbyEntities: WorldNearbyEntity[];
+          inventory: Record<string, number>;
+          nearbyEntities: WorldNearbyEntity[];
+          relations: {
+            allies: string[];
+            enemies: string[];
+            neutral: string[];
+          };
+          inbox: Array<{
+            fromAgentId: string;
+            message: string;
+            tick: number;
+          }>;
+          model: string | null;
+          effort: TurnEffort;
+        }>;
         catalog: {
           prefabs: Array<{
             id: string;
@@ -171,6 +193,7 @@ export type ServerMessage =
       version: Version;
       type: "agent.turn";
       payload: {
+        agentId: string;
         turnId: string;
         status: "started" | "completed" | "failed" | "interrupted";
         latencyMs: number;
@@ -185,6 +208,7 @@ export type ServerMessage =
       version: Version;
       type: "agent.action";
       payload: {
+        agentId: string;
         action: AgentAction;
         result: "accepted" | "invalid" | "applied" | "rejected";
         reason?: string;
@@ -194,6 +218,7 @@ export type ServerMessage =
       version: Version;
       type: "agent.feed";
       payload: {
+        agentId?: string;
         role: "god" | "agent" | "system" | "reasoning";
         text: string;
       };
@@ -217,6 +242,13 @@ export type ServerMessage =
       };
     };
 
+const sessionAgentSchema = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().min(1).max(80),
+  model: z.string().min(1).max(120).optional(),
+  effort: z.string().min(1).max(32).optional()
+});
+
 const clientMessageSchema = z.discriminatedUnion("type", [
   z.object({
     version: z.literal(PROTOCOL_VERSION),
@@ -224,13 +256,14 @@ const clientMessageSchema = z.discriminatedUnion("type", [
     payload: z.object({
       seed: z.number().int().optional(),
       model: z.string().min(1).max(120).optional(),
-      effort: z.string().min(1).max(32).optional()
+      effort: z.string().min(1).max(32).optional(),
+      agents: z.array(sessionAgentSchema).min(1).max(4)
     })
   }),
   z.object({
     version: z.literal(PROTOCOL_VERSION),
     type: z.literal("god.send"),
-    payload: z.object({ text: z.string().min(1) })
+    payload: z.object({ text: z.string().min(1), targetAgentId: z.string().min(1).optional() })
   }),
   z.object({
     version: z.literal(PROTOCOL_VERSION),

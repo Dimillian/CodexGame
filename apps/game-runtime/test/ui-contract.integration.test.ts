@@ -21,7 +21,7 @@ describe("ui_runtime_contract", () => {
         phase: "running",
         paused: false,
         preparedSeed: null,
-        threadIds: { gameplay: "thr-a" },
+        threadIds: { gameplayByAgentId: { "agent-1": "thr-a" } },
         connected: true,
         runtime: {
           model: null,

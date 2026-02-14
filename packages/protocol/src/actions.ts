@@ -40,6 +40,20 @@ export const waitActionSchema = z.object({
   ticks: z.number().int().min(1).max(20)
 });
 
+export const talkActionSchema = z.object({
+  type: z.literal("talk"),
+  toAgentId: z.string().min(1),
+  message: z.string().min(1).max(240)
+});
+
+export const relationSchema = z.enum(["ally", "enemy", "neutral"]);
+
+export const setRelationActionSchema = z.object({
+  type: z.literal("set_relation"),
+  targetAgentId: z.string().min(1),
+  relation: relationSchema
+});
+
 export const agentActionSchema = z.discriminatedUnion("type", [
   moveActionSchema,
   interactActionSchema,
@@ -47,7 +61,9 @@ export const agentActionSchema = z.discriminatedUnion("type", [
   attackActionSchema,
   craftActionSchema,
   placeActionSchema,
-  waitActionSchema
+  waitActionSchema,
+  talkActionSchema,
+  setRelationActionSchema
 ]);
 
 export const agentTurnOutputSchema = z.object({
@@ -81,10 +97,14 @@ export const agentTurnOutputJsonSchema = {
           "prefabId",
           "x",
           "y",
-          "ticks"
+          "ticks",
+          "toAgentId",
+          "message",
+          "targetAgentId",
+          "relation"
         ],
         properties: {
-          type: { enum: ["move", "interact", "gather", "attack", "craft", "place", "wait"] },
+          type: { enum: ["move", "interact", "gather", "attack", "craft", "place", "wait", "talk", "set_relation"] },
           direction: { enum: ["N", "NE", "E", "SE", "S", "SW", "W", "NW", null] },
           steps: { enum: [1, 2, 3, null] },
           targetId: { type: ["string", "null"] },
@@ -92,7 +112,11 @@ export const agentTurnOutputJsonSchema = {
           prefabId: { type: ["string", "null"] },
           x: { type: ["integer", "null"] },
           y: { type: ["integer", "null"] },
-          ticks: { type: ["integer", "null"] }
+          ticks: { type: ["integer", "null"] },
+          toAgentId: { type: ["string", "null"] },
+          message: { type: ["string", "null"] },
+          targetAgentId: { type: ["string", "null"] },
+          relation: { enum: ["ally", "enemy", "neutral", null] }
         }
       }
     }

@@ -46,16 +46,17 @@ function makeCreature(overrides: Partial<CreatureEntity>): CreatureEntity {
 
 describe("combat_ai", () => {
   it("applies attack action with range and cooldown checks", () => {
-    const simulation = new Simulation(11, 8, 8, content);
+    const simulation = new Simulation(11, 8, 8, content, [{ id: "agent-1", name: "Agent 1" }]);
     flattenToPlains(simulation);
     const state = simulation.getState();
-    state.actor.x = 3;
-    state.actor.y = 3;
-    state.actor.attack = 4;
-    state.actor.defense = 2;
-    state.actor.attackRange = 1;
-    state.actor.cooldownTicks = 0;
-    state.actor.maxCooldownTicks = 2;
+    const agent = state.agents[0]!;
+    agent.x = 3;
+    agent.y = 3;
+    agent.attack = 4;
+    agent.defense = 2;
+    agent.attackRange = 1;
+    agent.cooldownTicks = 0;
+    agent.maxCooldownTicks = 2;
 
     state.entities = [
       makeCreature({
@@ -68,27 +69,39 @@ describe("combat_ai", () => {
       })
     ];
 
-    const first = simulation.applyAction({ type: "attack", targetId: "npc-1" });
+    const first = simulation.applyAction("agent-1", { type: "attack", targetId: "npc-1" });
     expect(first.result).toBe("applied");
     const creature = state.entities.find((entity): entity is CreatureEntity => entity.type === "creature");
     expect(creature?.hp).toBe(6);
-    expect(state.actor.cooldownTicks).toBe(2);
+    expect(agent.cooldownTicks).toBe(2);
 
-    const second = simulation.applyAction({ type: "attack", targetId: "npc-1" });
+    const second = simulation.applyAction("agent-1", { type: "attack", targetId: "npc-1" });
     expect(second.result).toBe("rejected");
     expect(second.reason).toBe("attack_cooldown");
   });
 
-  it("chases and attacks actor on deterministic ticks", () => {
-    const simulation = new Simulation(22, 8, 8, content);
+  it("chases and attacks nearest alive agent on deterministic ticks", () => {
+    const simulation = new Simulation(22, 8, 8, content, [
+      { id: "agent-1", name: "Agent 1" },
+      { id: "agent-2", name: "Agent 2" }
+    ]);
     flattenToPlains(simulation);
     const state = simulation.getState();
-    state.actor.x = 2;
-    state.actor.y = 2;
-    state.actor.hp = 20;
-    state.actor.maxHp = 20;
-    state.actor.defense = 1;
-    state.actor.alive = true;
+    const a1 = state.agents.find((agent) => agent.id === "agent-1")!;
+    const a2 = state.agents.find((agent) => agent.id === "agent-2")!;
+    a1.x = 2;
+    a1.y = 2;
+    a1.hp = 20;
+    a1.maxHp = 20;
+    a1.defense = 1;
+    a1.alive = true;
+
+    a2.x = 7;
+    a2.y = 7;
+    a2.hp = 20;
+    a2.maxHp = 20;
+    a2.defense = 1;
+    a2.alive = true;
 
     state.tick = 24;
     state.entities = [
@@ -119,21 +132,21 @@ describe("combat_ai", () => {
     }
     expect(chased).toBe(true);
 
-    const hpBeforeAttack = state.actor.hp;
+    const hpBeforeAttack = a1.hp;
     let attacked = false;
     for (let index = 0; index < 180; index += 1) {
       simulation.tick();
-      if (state.actor.hp < hpBeforeAttack) {
+      if (a1.hp < hpBeforeAttack) {
         attacked = true;
         break;
       }
     }
     expect(attacked).toBe(true);
 
-    const hpAfterAttack = state.actor.hp;
+    const hpAfterAttack = a1.hp;
     for (let index = 0; index < 5; index += 1) {
       simulation.tick();
     }
-    expect(state.actor.hp).toBe(hpAfterAttack);
+    expect(a1.hp).toBe(hpAfterAttack);
   });
 });

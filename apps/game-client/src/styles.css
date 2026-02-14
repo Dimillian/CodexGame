@@ -160,6 +160,70 @@ select {
   gap: 8px;
 }
 
+.session-controls--setup {
+  max-height: 34vh;
+  min-height: 180px;
+}
+
+.session-defaults {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px;
+  gap: 8px;
+}
+
+.agent-config-list {
+  display: grid;
+  gap: 8px;
+  max-height: 26vh;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.agent-config-card {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(5, 12, 22, 0.55);
+  border-radius: 10px;
+  padding: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.agent-config-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: #d6c7af;
+}
+
+.agent-config-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.agent-config-id {
+  grid-column: 1 / -1;
+}
+
+.remove-agent-btn {
+  padding: 4px 8px;
+  font-size: 11px;
+  background: rgba(94, 42, 42, 0.75);
+}
+
+.remove-agent-btn:hover {
+  background: rgba(132, 58, 58, 0.85);
+}
+
+.session-controls-inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .session-controls-selects {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 110px;
@@ -272,6 +336,23 @@ select {
 
   .session-controls-selects {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .session-defaults {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .session-controls--setup {
+    max-height: 30vh;
+    min-height: 140px;
+  }
+
+  .agent-config-list {
+    max-height: 22vh;
+  }
+
+  .agent-config-fields {
+    grid-template-columns: 1fr;
   }
 
   .session-controls-actions {

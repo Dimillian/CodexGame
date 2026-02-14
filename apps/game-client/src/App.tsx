@@ -1,11 +1,13 @@
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import Phaser from "phaser";
-import type { RuntimeModelOption, ServerMessage, SessionPhase, TurnEffort } from "@codexgame/protocol";
+import type { RuntimeModelOption, ServerMessage, SessionPhase } from "@codexgame/protocol";
 import { PROTOCOL_VERSION } from "@codexgame/protocol";
+import { GodConsoleSidebar } from "./components/GodConsoleSidebar";
 import { IsometricScene, type IsoSnapshot } from "./game/IsometricScene";
 
 type FeedItem = {
   id: string;
+  agentId?: string | undefined;
   role: "god" | "agent" | "system" | "reasoning";
   text: string;
 };
@@ -22,6 +24,27 @@ type CatalogPrefab = {
   kind: string;
 };
 
+type RuntimeAgent = {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  stamina: number;
+  hp: number;
+  maxHp: number;
+  alive: boolean;
+  inventory: Record<string, number>;
+  nearbyEntities: Array<{ id: string; type: string; distance: number }>;
+  model: string | null;
+  effort: string;
+};
+
+type AgentConfigDraft = {
+  id: string;
+  model: string;
+  effort: string;
+};
+
 const runtimeUrl = import.meta.env.VITE_RUNTIME_WS_URL ?? "ws://127.0.0.1:8787";
 
 function formatItemId(value: string): string {
@@ -31,15 +54,32 @@ function formatItemId(value: string): string {
     .join(" ");
 }
 
-function formatReasoningText(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "...";
+function defaultAgentConfig(index: number): AgentConfigDraft {
+  const id = `agent-${index + 1}`;
+  return {
+    id,
+    model: "",
+    effort: "low"
+  };
+}
+
+function effortOptionsForModel(modelValue: string, availableModels: RuntimeModelOption[]): string[] {
+  if (!modelValue) {
+    return ["low", "medium", "high"];
   }
-  if (/^thinking(?:\.\.\.)?$/i.test(trimmed)) {
-    return "...";
+  const model = availableModels.find((entry) => entry.model === modelValue);
+  if (!model) {
+    return ["low", "medium", "high"];
   }
-  return trimmed.replace(/^thinking(?:\.\.\.)?\s*/i, "");
+  const supported = model.supportedReasoningEfforts.map((entry) => entry.reasoningEffort);
+  const withDefault = model.defaultReasoningEffort ? [model.defaultReasoningEffort, ...supported] : supported;
+  const unique = [...new Set(withDefault.filter((value) => value.trim().length > 0))];
+  return unique.length > 0 ? unique : ["low", "medium", "high"];
+}
+
+function defaultModelValue(availableModels: RuntimeModelOption[]): string {
+  const defaultModel = availableModels.find((model) => model.isDefault) ?? availableModels[0];
+  return defaultModel?.model ?? "";
 }
 
 export default function App() {
@@ -48,45 +88,53 @@ export default function App() {
   const wsRef = useRef<WebSocket | null>(null);
   const feedRef = useRef<HTMLDivElement | null>(null);
   const shouldStickFeedToBottomRef = useRef(true);
+  const selectedAgentIdRef = useRef<string>("agent-1");
 
   const [phase, setPhase] = useState<SessionPhase>("idle");
   const [connected, setConnected] = useState(false);
-  const [threadIds, setThreadIds] = useState<{ gameplay?: string; builder?: string }>({});
+  const [threadIds, setThreadIds] = useState<{ gameplayByAgentId: Record<string, string>; builder?: string }>({
+    gameplayByAgentId: {}
+  });
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [latencyMs, setLatencyMs] = useState<number>(0);
   const [tick, setTick] = useState<number>(0);
-  const [stamina, setStamina] = useState<number>(0);
-  const [hp, setHp] = useState<number>(0);
-  const [maxHp, setMaxHp] = useState<number>(0);
-  const [inventory, setInventory] = useState<Record<string, number>>({});
-  const [nearbyResources, setNearbyResources] = useState<Array<{ id: string; subtype: string; quantity: number; distance: number }>>([]);
   const [catalog, setCatalog] = useState<{ prefabs: CatalogPrefab[]; recipes: CatalogRecipe[] }>({
     prefabs: [],
     recipes: []
   });
+  const [worldEntities, setWorldEntities] = useState<Array<{ id: string; type: "resource" | "creature"; subtype: string; quantity: number }>>([]);
+  const [runtimeAgents, setRuntimeAgents] = useState<RuntimeAgent[]>([]);
+  const [selectedAgentId, setSelectedAgentId] = useState<string>("agent-1");
+
   const [buildGoal, setBuildGoal] = useState("");
   const [chatText, setChatText] = useState("");
+  const [godTargetAgentId, setGodTargetAgentId] = useState<string>("all");
   const [paused, setPaused] = useState(false);
   const [preparedSeed, setPreparedSeed] = useState<number | null>(null);
-  const [selectedModelId, setSelectedModelId] = useState<string>("");
-  const [effort, setEffort] = useState<TurnEffort>("low");
+
   const [availableModels, setAvailableModels] = useState<RuntimeModelOption[]>([]);
   const [runtimeModel, setRuntimeModel] = useState<string | null>(null);
-  const [runtimeEffort, setRuntimeEffort] = useState<TurnEffort>("low");
+  const [runtimeEffort, setRuntimeEffort] = useState<string>("low");
   const [runtimeSchedulerMs, setRuntimeSchedulerMs] = useState<number>(0);
   const [runtimeQueueAhead, setRuntimeQueueAhead] = useState<number>(0);
 
-  function appendFeed(role: FeedItem["role"], text: string): void {
+  const [agentConfigs, setAgentConfigs] = useState<AgentConfigDraft[]>([defaultAgentConfig(0)]);
+
+  useEffect(() => {
+    selectedAgentIdRef.current = selectedAgentId;
+  }, [selectedAgentId]);
+
+  function appendFeed(role: FeedItem["role"], text: string, agentId?: string): void {
     setFeed((current) => {
       if (role === "reasoning" && current.length > 0) {
         const last = current[current.length - 1];
-        if (last && last.role === "reasoning") {
+        if (last && last.role === "reasoning" && last.agentId === agentId) {
           const merged = [...current];
           merged[merged.length - 1] = {
             ...last,
             text: `${last.text}${text}`
           };
-          return merged.slice(-100);
+          return merged.slice(-160);
         }
       }
       return [
@@ -94,9 +142,10 @@ export default function App() {
         {
           id: `${Date.now()}-${Math.random()}`,
           role,
-          text
+          text,
+          agentId
         }
-      ].slice(-100);
+      ].slice(-160);
     });
   }
 
@@ -115,6 +164,9 @@ export default function App() {
     }
 
     const scene = new IsometricScene();
+    scene.setOnAgentSelect((agentId) => {
+      setSelectedAgentId(agentId);
+    });
     sceneRef.current = scene;
 
     const game = new Phaser.Game({
@@ -160,50 +212,50 @@ export default function App() {
           setAvailableModels(message.payload.runtime.availableModels);
           if (message.payload.phase === "idle") {
             setTick(0);
-            setStamina(0);
-            setHp(0);
-            setMaxHp(0);
-            setInventory({});
-            setNearbyResources([]);
+            setRuntimeAgents([]);
+            setWorldEntities([]);
+            setCatalog({ prefabs: [], recipes: [] });
             sceneRef.current?.clearSnapshot();
           }
           return;
         case "world.snapshot": {
+          const currentSelectedAgentId = selectedAgentIdRef.current;
           const nextSnapshot: IsoSnapshot = {
             seed: message.payload.world.seed,
             tiles: message.payload.world.tiles,
             entities: message.payload.world.entities,
-            actor: {
-              x: message.payload.actor.x,
-              y: message.payload.actor.y
-            },
+            agents: message.payload.agents.map((agent) => ({
+              id: agent.id,
+              name: agent.name,
+              x: agent.x,
+              y: agent.y,
+              alive: agent.alive
+            })),
+            focusedAgentId: currentSelectedAgentId,
             placements: message.payload.world.placements
           };
 
-          const resources = message.payload.world.entities
-            .filter((entity) => entity.type === "resource")
-            .map((entity) => ({
-              id: entity.id,
-              subtype: entity.subtype,
-              quantity: entity.quantity,
-              distance: Math.abs(entity.x - message.payload.actor.x) + Math.abs(entity.y - message.payload.actor.y)
-            }))
-            .filter((entity) => entity.distance <= 6)
-            .sort((a, b) => a.distance - b.distance)
-            .slice(0, 8);
-
           setTick(message.payload.tick);
-          setStamina(message.payload.actor.stamina);
-          setHp(message.payload.actor.hp);
-          setMaxHp(message.payload.actor.maxHp);
-          setInventory(message.payload.inventory);
+          setRuntimeAgents(message.payload.agents);
+          setWorldEntities(
+            message.payload.world.entities.map((entity) => ({
+              id: entity.id,
+              type: entity.type,
+              subtype: entity.subtype,
+              quantity: entity.quantity
+            }))
+          );
           setCatalog(message.payload.catalog);
-          setNearbyResources(resources);
+
+          if (!message.payload.agents.some((agent) => agent.id === currentSelectedAgentId)) {
+            setSelectedAgentId(message.payload.agents[0]?.id ?? "agent-1");
+          }
+
           sceneRef.current?.setSnapshot(nextSnapshot);
           return;
         }
         case "agent.feed":
-          appendFeed(message.payload.role, message.payload.text);
+          appendFeed(message.payload.role, message.payload.text, message.payload.agentId);
           return;
         case "agent.turn":
           setLatencyMs(message.payload.latencyMs);
@@ -225,47 +277,6 @@ export default function App() {
     };
   }, []);
 
-  const threadSummary = useMemo(() => {
-    const gameplay = threadIds.gameplay ? `game: ${threadIds.gameplay.slice(0, 8)}` : "game: -";
-    const builder = threadIds.builder ? `build: ${threadIds.builder.slice(0, 8)}` : "build: -";
-    return `${gameplay} | ${builder}`;
-  }, [threadIds.builder, threadIds.gameplay]);
-
-  useEffect(() => {
-    if (availableModels.length === 0) {
-      return;
-    }
-    if (selectedModelId && availableModels.some((model) => model.id === selectedModelId)) {
-      return;
-    }
-    const defaultModel = availableModels.find((model) => model.isDefault) ?? availableModels[0];
-    if (defaultModel) {
-      setSelectedModelId(defaultModel.id);
-    }
-  }, [availableModels, selectedModelId]);
-
-  const selectedModel = useMemo(
-    () => availableModels.find((model) => model.id === selectedModelId) ?? null,
-    [availableModels, selectedModelId]
-  );
-
-  const effortOptions = useMemo(() => {
-    const fromModel = selectedModel?.supportedReasoningEfforts.map((entry) => entry.reasoningEffort) ?? [];
-    const fromDefault = selectedModel?.defaultReasoningEffort ? [selectedModel.defaultReasoningEffort] : [];
-    const merged = [...new Set([...fromModel, ...fromDefault].filter((value) => value.trim().length > 0))];
-    if (merged.length > 0) {
-      return merged;
-    }
-    return ["low", "medium", "high"];
-  }, [selectedModel]);
-
-  useEffect(() => {
-    if (effortOptions.includes(effort)) {
-      return;
-    }
-    setEffort(effortOptions[0] ?? "low");
-  }, [effort, effortOptions]);
-
   useEffect(() => {
     const node = feedRef.current;
     if (!node || !shouldStickFeedToBottomRef.current) {
@@ -274,50 +285,101 @@ export default function App() {
     node.scrollTop = node.scrollHeight;
   }, [feed]);
 
+  const selectedAgent = useMemo(
+    () => runtimeAgents.find((agent) => agent.id === selectedAgentId) ?? runtimeAgents[0] ?? null,
+    [runtimeAgents, selectedAgentId]
+  );
+
+  useEffect(() => {
+    const fallbackModel = defaultModelValue(availableModels);
+    if (!fallbackModel) {
+      return;
+    }
+    setAgentConfigs((current) =>
+      current.map((entry) => {
+        const model = entry.model || fallbackModel;
+        const options = effortOptionsForModel(model, availableModels);
+        const effort = options.includes(entry.effort) ? entry.effort : (options[0] ?? "low");
+        if (model === entry.model && effort === entry.effort) {
+          return entry;
+        }
+        return { ...entry, model, effort };
+      })
+    );
+  }, [availableModels]);
+
+  const threadSummary = useMemo(() => {
+    const ids = Object.entries(threadIds.gameplayByAgentId)
+      .map(([agentId, threadId]) => `${agentId}:${threadId.slice(0, 6)}`)
+      .join(" | ");
+    const builder = threadIds.builder ? `build:${threadIds.builder.slice(0, 6)}` : "build:-";
+    return `${ids || "agents:-"} | ${builder}`;
+  }, [threadIds]);
+
   const itemNameById = useMemo(() => {
     const entries = catalog.prefabs.map((prefab) => [prefab.id, prefab.name] as const);
     return new Map(entries);
   }, [catalog.prefabs]);
 
-  const inventoryEntries = useMemo(
-    () =>
-      Object.entries(inventory)
-        .map(([item, count]) => ({
-          item,
-          count,
-          label: itemNameById.get(item) ?? formatItemId(item)
-        }))
-        .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label)),
-    [inventory, itemNameById]
-  );
+  const inventoryEntries = useMemo(() => {
+    if (!selectedAgent) {
+      return [];
+    }
+    return Object.entries(selectedAgent.inventory)
+      .map(([item, count]) => ({
+        item,
+        count,
+        label: itemNameById.get(item) ?? formatItemId(item)
+      }))
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+  }, [selectedAgent, itemNameById]);
 
-  const recipeRows = useMemo(
-    () =>
-      catalog.recipes.map((recipe) => {
-        const craftable = recipe.input.every((ingredient) => (inventory[ingredient.item] ?? 0) >= ingredient.count);
-        return {
-          id: recipe.id,
-          output: `${itemNameById.get(recipe.output.item) ?? formatItemId(recipe.output.item)} x${recipe.output.count}`,
-          input: recipe.input
-            .map((ingredient) => `${formatItemId(ingredient.item)} x${ingredient.count}`)
-            .join(", "),
-          craftable
-        };
-      }),
-    [catalog.recipes, inventory, itemNameById]
-  );
+  const nearbyResources = useMemo(() => {
+    if (!selectedAgent) {
+      return [] as Array<{ id: string; subtype: string; quantity: number; distance: number }>;
+    }
+    const quantityById = new Map(worldEntities.map((entity) => [entity.id, entity.quantity] as const));
+    const typeById = new Map(worldEntities.map((entity) => [entity.id, entity.subtype] as const));
 
-  const buildableRows = useMemo(
-    () =>
-      catalog.prefabs
-        .filter((prefab) => prefab.kind === "structure")
-        .map((prefab) => ({
-          id: prefab.id,
-          label: prefab.name,
-          owned: inventory[prefab.id] ?? 0
-        })),
-    [catalog.prefabs, inventory]
-  );
+    return selectedAgent.nearbyEntities
+      .filter((entity) => entity.type.startsWith("resource:"))
+      .map((entity) => ({
+        id: entity.id,
+        subtype: typeById.get(entity.id) ?? entity.type.replace("resource:", ""),
+        quantity: quantityById.get(entity.id) ?? 0,
+        distance: entity.distance
+      }))
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, 8);
+  }, [selectedAgent, worldEntities]);
+
+  const recipeRows = useMemo(() => {
+    if (!selectedAgent) {
+      return [];
+    }
+    return catalog.recipes.map((recipe) => {
+      const craftable = recipe.input.every((ingredient) => (selectedAgent.inventory[ingredient.item] ?? 0) >= ingredient.count);
+      return {
+        id: recipe.id,
+        output: `${itemNameById.get(recipe.output.item) ?? formatItemId(recipe.output.item)} x${recipe.output.count}`,
+        input: recipe.input.map((ingredient) => `${formatItemId(ingredient.item)} x${ingredient.count}`).join(", "),
+        craftable
+      };
+    });
+  }, [catalog.recipes, selectedAgent, itemNameById]);
+
+  const buildableRows = useMemo(() => {
+    if (!selectedAgent) {
+      return [];
+    }
+    return catalog.prefabs
+      .filter((prefab) => prefab.kind === "structure")
+      .map((prefab) => ({
+        id: prefab.id,
+        label: prefab.name,
+        owned: selectedAgent.inventory[prefab.id] ?? 0
+      }));
+  }, [catalog.prefabs, selectedAgent]);
 
   function send(payload: Record<string, unknown>): void {
     const ws = wsRef.current;
@@ -328,13 +390,21 @@ export default function App() {
   }
 
   function startSession(seed?: number): void {
+    const sanitized = agentConfigs
+      .map((config, index) => ({
+        id: config.id.trim() || `agent-${index + 1}`,
+        name: config.id.trim() || `agent-${index + 1}`,
+        model: config.model.trim() || undefined,
+        effort: config.effort.trim() || undefined
+      }))
+      .slice(0, 4);
+
     send({
       version: PROTOCOL_VERSION,
       type: "session.start",
       payload: {
         seed,
-        model: selectedModel?.model ?? undefined,
-        effort
+        agents: sanitized
       }
     });
   }
@@ -354,9 +424,8 @@ export default function App() {
     setBuildGoal("");
     setLatencyMs(0);
     setTick(0);
-    setStamina(0);
-    setInventory({});
-    setNearbyResources([]);
+    setRuntimeAgents([]);
+    setWorldEntities([]);
     setCatalog({ prefabs: [], recipes: [] });
     setPhase("idle");
     setPaused(false);
@@ -393,6 +462,17 @@ export default function App() {
     });
   }
 
+  function sendGodMessage(text: string): void {
+    send({
+      version: PROTOCOL_VERSION,
+      type: "god.send",
+      payload: {
+        text,
+        targetAgentId: godTargetAgentId === "all" ? undefined : godTargetAgentId
+      }
+    });
+  }
+
   function onChatSend(event: FormEvent): void {
     event.preventDefault();
     if (phase !== "running") {
@@ -402,13 +482,7 @@ export default function App() {
     if (!text) {
       return;
     }
-    send({
-      version: PROTOCOL_VERSION,
-      type: "god.send",
-      payload: {
-        text
-      }
-    });
+    sendGodMessage(text);
     setChatText("");
   }
 
@@ -424,14 +498,50 @@ export default function App() {
     if (!text) {
       return;
     }
-    send({
-      version: PROTOCOL_VERSION,
-      type: "god.send",
-      payload: {
-        text
-      }
-    });
+    sendGodMessage(text);
     setChatText("");
+  }
+
+  function updateAgentConfig(index: number, key: keyof AgentConfigDraft, value: string): void {
+    setAgentConfigs((current) =>
+      current.map((entry, idx) => {
+        if (idx !== index) {
+          return entry;
+        }
+        if (key === "model") {
+          const options = effortOptionsForModel(value, availableModels);
+          return {
+            ...entry,
+            model: value,
+            effort: options.includes(entry.effort) ? entry.effort : (options[0] ?? "low")
+          };
+        }
+        return { ...entry, [key]: value };
+      })
+    );
+  }
+
+  function addAgentConfig(): void {
+    setAgentConfigs((current) => {
+      if (current.length >= 4) {
+        return current;
+      }
+      const next = defaultAgentConfig(current.length);
+      const model = defaultModelValue(availableModels);
+      const effort = effortOptionsForModel(model, availableModels)[0] ?? "low";
+      return [
+        ...current,
+        {
+          ...next,
+          model,
+          effort
+        }
+      ];
+    });
+  }
+
+  function removeAgentConfig(index: number): void {
+    setAgentConfigs((current) => (current.length <= 1 ? current : current.filter((_, idx) => idx !== index)));
   }
 
   const primarySessionLabel = phase === "running" ? (paused ? "Resume" : "Pause") : phase === "starting" ? "Starting..." : "Start";
@@ -456,12 +566,23 @@ export default function App() {
           <div className="game-surface" ref={phaserContainerRef} />
           <div className="game-hud">
             <div className="hud-card">
-              <h3>Agent</h3>
+              <h3>Selected Agent</h3>
               <p>Tick: {tick}</p>
-              <p>Stamina: {stamina}</p>
+              <p>Agent: {selectedAgent?.id ?? "-"}</p>
+              <p>Status: {selectedAgent?.alive ? "alive" : "down"}</p>
               <p>
-                HP: {hp}/{maxHp}
+                HP: {selectedAgent?.hp ?? 0}/{selectedAgent?.maxHp ?? 0}
               </p>
+              <p>Stamina: {selectedAgent?.stamina ?? 0}</p>
+            </div>
+
+            <div className="hud-card">
+              <h3>Agents</h3>
+              {runtimeAgents.map((agent) => (
+                <p key={agent.id} className={agent.id === selectedAgent?.id ? "ok" : undefined}>
+                  {agent.id} {agent.hp}/{agent.maxHp}
+                </p>
+              ))}
             </div>
 
             <div className="hud-card">
@@ -515,103 +636,40 @@ export default function App() {
         </div>
       </div>
 
-      <aside className="console">
-        <h2>God Console</h2>
-        <div className="console-meta">
-          <span className="pill">{threadSummary}</span>
-          <span className="pill">Queue-ahead: {runtimeQueueAhead || "-"}</span>
-          <span className="pill">{worldSeedLabel}</span>
-        </div>
-        <div className="session-controls">
-          <div className="session-controls-selects">
-            <select
-              aria-label="Model"
-              value={selectedModelId}
-              onChange={(event) => setSelectedModelId(event.target.value)}
-            >
-              <option value="">Default model</option>
-              {availableModels.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.displayName || model.model}
-                </option>
-              ))}
-            </select>
-            <select
-              aria-label="Reasoning effort"
-              value={effort}
-              onChange={(event) => setEffort(event.target.value as TurnEffort)}
-            >
-              {effortOptions.map((effortOption) => (
-                <option key={effortOption} value={effortOption}>
-                  {effortOption}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="session-controls-actions">
-            <button
-              type="button"
-              onClick={onSessionPrimaryAction}
-              className="button-compact"
-              disabled={primarySessionDisabled}
-            >
-              {primarySessionLabel}
-            </button>
-            <button
-              type="button"
-              onClick={prepareNewWorld}
-              className="button-compact"
-              disabled={!connected || phase === "starting"}
-            >
-              New
-            </button>
-          </div>
-        </div>
-        <div className="console-hint muted">Models from app-server: {availableModels.length}</div>
-
-        <div className="feed" ref={feedRef} onScroll={onFeedScroll}>
-          {feed.map((item) => (
-            <div className={`feed-item${item.role === "reasoning" ? " feed-item--reasoning" : ""}`} key={item.id}>
-              <span className={`feed-role feed-role--${item.role}`}>
-                {item.role === "reasoning" ? "thinking" : item.role}
-              </span>
-              <span className={item.role === "reasoning" ? "feed-text--reasoning" : undefined}>
-                {item.role === "reasoning" ? formatReasoningText(item.text) : item.text}
-              </span>
-            </div>
-          ))}
-        </div>
-
-        <div className="console-compose">
-          <form className="row" onSubmit={onBuildRequest}>
-            <input
-              value={buildGoal}
-              onChange={(event) => setBuildGoal(event.target.value)}
-              disabled={!worldInteractionEnabled}
-              placeholder="Example: add a wooden shield recipe (3 wood, 2 fiber, output 1 wooden_shield)"
-            />
-            <button type="submit" disabled={!worldInteractionEnabled}>
-              Build
-            </button>
-          </form>
-
-          <form onSubmit={onChatSend}>
-            <textarea
-              rows={3}
-              value={chatText}
-              onChange={(event) => setChatText(event.target.value)}
-              onKeyDown={onChatKeyDown}
-              disabled={!worldInteractionEnabled}
-              placeholder="Speak to the on-screen Codex agent..."
-            />
-            <div className="row chat-send-row">
-              <button type="submit" disabled={!worldInteractionEnabled}>
-                Send
-              </button>
-            </div>
-          </form>
-        </div>
-      </aside>
+      <GodConsoleSidebar
+        phase={phase}
+        threadSummary={threadSummary}
+        runtimeQueueAhead={runtimeQueueAhead}
+        worldSeedLabel={worldSeedLabel}
+        agentConfigs={agentConfigs}
+        availableModels={availableModels}
+        effortOptionsForModel={effortOptionsForModel}
+        updateAgentConfig={updateAgentConfig}
+        removeAgentConfig={removeAgentConfig}
+        addAgentConfig={addAgentConfig}
+        selectedAgentId={selectedAgentId}
+        setSelectedAgentId={setSelectedAgentId}
+        godTargetAgentId={godTargetAgentId}
+        setGodTargetAgentId={setGodTargetAgentId}
+        runtimeAgents={runtimeAgents.map((agent) => ({ id: agent.id }))}
+        primarySessionLabel={primarySessionLabel}
+        primarySessionDisabled={primarySessionDisabled}
+        onSessionPrimaryAction={onSessionPrimaryAction}
+        onPrepareNewWorld={prepareNewWorld}
+        newDisabled={!connected || phase === "starting"}
+        modelsCount={availableModels.length}
+        feed={feed}
+        feedRef={feedRef}
+        onFeedScroll={onFeedScroll}
+        buildGoal={buildGoal}
+        setBuildGoal={setBuildGoal}
+        onBuildRequest={onBuildRequest}
+        chatText={chatText}
+        setChatText={setChatText}
+        onChatKeyDown={onChatKeyDown}
+        onChatSend={onChatSend}
+        worldInteractionEnabled={worldInteractionEnabled}
+      />
     </div>
   );
 }

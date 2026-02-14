@@ -1,8 +1,8 @@
 import type { AgentAction, BuildOutput, ContentOperation, ServerMessage, SessionPhase } from "@codexgame/protocol";
-import type { ContentSet, SimulationState, WorldSnapshot } from "@codexgame/simulation";
+import type { ContentSet, SimulationState } from "@codexgame/simulation";
 
 export type ThreadIds = {
-  gameplay?: string;
+  gameplayByAgentId: Record<string, string>;
   builder?: string;
 };
 
@@ -30,7 +30,6 @@ export type RuntimeMetrics = {
 export type SessionSnapshot = {
   seed: number;
   tick: number;
-  actor: WorldSnapshot["actor"];
   threadIds: ThreadIds;
   metrics: RuntimeMetrics;
   simulation: SimulationState;

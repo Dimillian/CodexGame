@@ -37,8 +37,11 @@ type PlacementRender = {
 };
 
 type ActorRender = {
+  id: string;
+  name: string;
   x: number;
   y: number;
+  alive: boolean;
   object: Phaser.GameObjects.GameObject;
 };
 
@@ -56,10 +59,14 @@ export type IsoSnapshot = {
     maxHp?: number;
     behaviorState?: "idle" | "chase" | "attack";
   }>;
-  actor: {
+  agents: Array<{
+    id: string;
+    name: string;
     x: number;
     y: number;
-  };
+    alive: boolean;
+  }>;
+  focusedAgentId?: string;
   placements: Array<{ id: string; prefabId: string; x: number; y: number }>;
 };
 
@@ -207,6 +214,8 @@ export class IsometricScene extends Phaser.Scene {
   private sceneReady = false;
   private cameraKeys: CameraKeys | null = null;
   private cameraFollowActor = true;
+  private focusedAgentId: string | null = null;
+  private onAgentSelect: ((agentId: string) => void) | null = null;
 
   private hoverElement: HTMLDivElement | null = null;
   private hoverLines = new WeakMap<Phaser.GameObjects.GameObject, () => string[]>();
@@ -214,7 +223,7 @@ export class IsometricScene extends Phaser.Scene {
   private terrainGrid: TerrainCellRender[][] = [];
   private entityRenders = new Map<string, EntityRender>();
   private placementRenders = new Map<string, PlacementRender>();
-  private actorRender: ActorRender | null = null;
+  private actorRenders = new Map<string, ActorRender>();
   private layoutDirty = true;
 
   public constructor() {
@@ -272,10 +281,15 @@ export class IsometricScene extends Phaser.Scene {
 
   public setSnapshot(snapshot: IsoSnapshot): void {
     this.snapshot = snapshot;
+    this.focusedAgentId = snapshot.focusedAgentId ?? snapshot.agents[0]?.id ?? this.focusedAgentId;
     if (!this.sceneReady) {
       return;
     }
     this.syncRenderState();
+  }
+
+  public setOnAgentSelect(callback: ((agentId: string) => void) | null): void {
+    this.onAgentSelect = callback;
   }
 
   public clearSnapshot(): void {
@@ -562,8 +576,10 @@ export class IsometricScene extends Phaser.Scene {
     }
     this.placementRenders.clear();
 
-    this.actorRender?.object.destroy();
-    this.actorRender = null;
+    for (const render of this.actorRenders.values()) {
+      render.object.destroy();
+    }
+    this.actorRenders.clear();
   }
 
   private terrainDepth(x: number, y: number): number {
@@ -928,31 +944,76 @@ export class IsometricScene extends Phaser.Scene {
     return this.add.circle(0, 0, 5, 0xffd166, 1);
   }
 
-  private syncActor(actor: IsoSnapshot["actor"]): void {
-    if (!this.actorRender) {
-      const actorRender: ActorRender = {
-        x: actor.x,
-        y: actor.y,
-        object: this.createActorObject()
-      };
-      this.attachHover(actorRender.object, () => [`Actor`, `Tile: (${actorRender.x}, ${actorRender.y})`]);
-      this.actorRender = actorRender;
-    }
+  private createActorRender(agent: IsoSnapshot["agents"][number]): ActorRender {
+    const render: ActorRender = {
+      id: agent.id,
+      name: agent.name,
+      x: agent.x,
+      y: agent.y,
+      alive: agent.alive,
+      object: this.createActorObject()
+    };
 
-    if (!this.actorRender) {
-      return;
-    }
+    const interactive = render.object as HoverTarget;
+    interactive.setInteractive({ useHandCursor: true });
+    interactive.on("pointerdown", () => {
+      this.focusedAgentId = agent.id;
+      this.cameraFollowActor = true;
+      this.onAgentSelect?.(agent.id);
+    });
 
-    this.actorRender.x = actor.x;
-    this.actorRender.y = actor.y;
+    this.attachHover(render.object, () => [
+      `Agent: ${render.name}`,
+      `ID: ${render.id}`,
+      `State: ${render.alive ? "alive" : "down"}`,
+      `Tile: (${render.x}, ${render.y})`
+    ]);
+    return render;
+  }
 
-    const positioned = this.actorRender.object as HoverTarget;
-    const point = this.tileToScreen(actor.x, actor.y, -8);
+  private positionActorRender(render: ActorRender): void {
+    const positioned = render.object as HoverTarget;
+    const point = this.tileToScreen(render.x, render.y, -8);
     positioned.setPosition(point.gx, point.gy);
-    positioned.setDepth(this.actorDepth(actor.x, actor.y));
+    positioned.setDepth(this.actorDepth(render.x, render.y));
+    const alphaTarget = render.alive ? 1 : 0.45;
+    const maybeAlpha = render.object as { setAlpha?: (alpha: number) => void };
+    if (typeof maybeAlpha.setAlpha === "function") {
+      maybeAlpha.setAlpha(alphaTarget);
+    }
+  }
 
-    if (this.cameraFollowActor) {
-      this.cameras.main.centerOn(point.gx, point.gy);
+  private syncActors(agents: IsoSnapshot["agents"]): void {
+    const seen = new Set<string>();
+    for (const agent of agents) {
+      seen.add(agent.id);
+      let render = this.actorRenders.get(agent.id);
+      if (!render) {
+        render = this.createActorRender(agent);
+        this.actorRenders.set(agent.id, render);
+      }
+      render.name = agent.name;
+      render.x = agent.x;
+      render.y = agent.y;
+      render.alive = agent.alive;
+      this.positionActorRender(render);
+    }
+
+    for (const [id, render] of this.actorRenders) {
+      if (seen.has(id)) {
+        continue;
+      }
+      render.object.destroy();
+      this.actorRenders.delete(id);
+    }
+
+    const focusId = this.focusedAgentId ?? agents[0]?.id;
+    if (focusId && this.cameraFollowActor) {
+      const focused = this.actorRenders.get(focusId);
+      if (focused) {
+        const point = this.tileToScreen(focused.x, focused.y, -8);
+        this.cameras.main.centerOn(point.gx, point.gy);
+      }
     }
   }
 
@@ -964,7 +1025,7 @@ export class IsometricScene extends Phaser.Scene {
     this.syncTerrain(this.snapshot.tiles);
     this.syncEntities(this.snapshot.entities);
     this.syncPlacements(this.snapshot.placements);
-    this.syncActor(this.snapshot.actor);
+    this.syncActors(this.snapshot.agents);
     this.layoutDirty = false;
   }
 }

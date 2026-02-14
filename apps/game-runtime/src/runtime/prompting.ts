@@ -2,7 +2,14 @@ import type { BuildOutput } from "@codexgame/protocol";
 import { buildPromptContext } from "@codexgame/simulation";
 import type { ContentSet, WorldSnapshot } from "@codexgame/simulation";
 
-export function buildGameplayPrompt(snapshot: WorldSnapshot, godMessages: string[], content: ContentSet): string {
+export function buildGameplayPrompt(
+  snapshot: WorldSnapshot,
+  agentId: string,
+  godMessages: string[],
+  content: ContentSet
+): string {
+  const self = snapshot.agents.find((agent) => agent.id === agentId);
+  const agentLabel = self ? `${self.name} (${self.id})` : agentId;
   const godInstruction =
     godMessages.length > 0
       ? [
@@ -13,16 +20,18 @@ export function buildGameplayPrompt(snapshot: WorldSnapshot, godMessages: string
       : "No new god messages.";
 
   return [
-    "You are the in-world actor in a deterministic isometric sandbox.",
+    `You are ${agentLabel}, one controllable in-world agent in a deterministic isometric sandbox.`,
+    `Control only this agent id: ${agentId}.`,
     "Output valid JSON only matching the provided schema. Never include markdown.",
     "You can gather resources, craft tools/weapons/structures from recipes, then place structures from inventory.",
+    "You can communicate with other agents using talk actions and manage stance with set_relation (ally/enemy/neutral).",
     "Hostile creatures exist. Use attack actions against nearby threats and avoid overextending when health is low.",
     "Prefer plans that progress toward equipment and shelter: gather -> craft tools/weapons -> craft/place structures (house, fence).",
     "Prefer safe, local, low-risk actions. Max 4 actions.",
     godInstruction,
     buildGameplayCatalogPrompt(content),
     "Current world context:",
-    buildPromptContext(snapshot)
+    buildPromptContext(snapshot, agentId)
   ].join("\n\n");
 }
 

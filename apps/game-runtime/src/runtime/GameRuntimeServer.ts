@@ -10,11 +10,12 @@ import {
   type AgentAction,
   type BuildOutput,
   type ClientMessage,
+  type RuntimeModelOption,
   type ServerMessage,
+  type SessionAgentConfig,
   type SessionPhase,
   type SessionStartPayload,
-  type TurnEffort,
-  type RuntimeModelOption
+  type TurnEffort
 } from "@codexgame/protocol";
 import { Simulation } from "@codexgame/simulation";
 import { CodexAppServerClient, type JsonRpcNotification } from "../codex/CodexAppServerClient";
@@ -29,6 +30,7 @@ import { StateStore } from "./stateStore";
 import type { BuildRequestResult, CompletedTurn, SessionSnapshot, ThreadIds, TurnUsage } from "./types";
 
 type PendingTurnCollector = {
+  agentId: string;
   threadId: string;
   turnId: string;
   startedAt: number;
@@ -89,6 +91,19 @@ function ensureTurnId(result: unknown): string {
   return id;
 }
 
+function uniqueAgents(agents: SessionAgentConfig[]): SessionAgentConfig[] {
+  const out: SessionAgentConfig[] = [];
+  const seen = new Set<string>();
+  for (const agent of agents) {
+    if (seen.has(agent.id)) {
+      continue;
+    }
+    seen.add(agent.id);
+    out.push(agent);
+  }
+  return out;
+}
+
 export class GameRuntimeServer {
   private readonly wsServer: WebSocketServer;
 
@@ -108,7 +123,9 @@ export class GameRuntimeServer {
 
   private phase: SessionPhase = "idle";
 
-  private threadIds: ThreadIds = {};
+  private threadIds: ThreadIds = { gameplayByAgentId: {} };
+
+  private readonly threadToAgentId = new Map<string, string>();
 
   private connected = false;
 
@@ -124,23 +141,23 @@ export class GameRuntimeServer {
 
   private persistTimer: NodeJS.Timeout | null = null;
 
-  private actionQueue: AgentAction[] = [];
+  private readonly actionQueueByAgent = new Map<string, AgentAction[]>();
 
-  private godQueue: string[] = [];
+  private readonly godQueueByAgent = new Map<string, string[]>();
 
-  private activeTurnId: string | null = null;
+  private readonly invalidStreakByAgent = new Map<string, number>();
+
+  private readonly autoplayBackoffUntilByAgent = new Map<string, number>();
+
+  private readonly godPriorityPendingByAgent = new Map<string, boolean>();
+
+  private activeTurn: { agentId: string; turnId: string } | null = null;
 
   private pendingTurns = new Map<string, PendingTurnCollector>();
 
   private readonly reasoningBuffers = new Map<string, string>();
 
   private autoplayLocked = false;
-
-  private autoplayBackoffUntil = 0;
-
-  private invalidStreak = 0;
-
-  private godPriorityPending = false;
 
   private interruptedTurnIds = new Set<string>();
 
@@ -151,6 +168,10 @@ export class GameRuntimeServer {
   private availableModels: RuntimeModelOption[] = [];
 
   private preparedSeed: number | null = null;
+
+  private schedulerIndex = 0;
+
+  private readonly agentConfigs = new Map<string, SessionAgentConfig>();
 
   public constructor(private readonly port: number) {
     this.wsServer = new WebSocketServer({ port: this.port });
@@ -206,7 +227,7 @@ export class GameRuntimeServer {
     this.codexClient.on("disconnect", () => {
       this.connected = false;
       this.sendSessionState();
-      this.handleDisconnect();
+      void this.handleDisconnect();
     });
 
     this.codexClient.on("error", (error: Error) => {
@@ -243,11 +264,59 @@ export class GameRuntimeServer {
     }
   }
 
+  private ensureAgentState(agentId: string): void {
+    if (!this.actionQueueByAgent.has(agentId)) {
+      this.actionQueueByAgent.set(agentId, []);
+    }
+    if (!this.godQueueByAgent.has(agentId)) {
+      this.godQueueByAgent.set(agentId, []);
+    }
+    if (!this.invalidStreakByAgent.has(agentId)) {
+      this.invalidStreakByAgent.set(agentId, 0);
+    }
+    if (!this.autoplayBackoffUntilByAgent.has(agentId)) {
+      this.autoplayBackoffUntilByAgent.set(agentId, 0);
+    }
+    if (!this.godPriorityPendingByAgent.has(agentId)) {
+      this.godPriorityPendingByAgent.set(agentId, false);
+    }
+  }
+
+  private resetAgentLoopState(agentIds: string[]): void {
+    this.actionQueueByAgent.clear();
+    this.godQueueByAgent.clear();
+    this.invalidStreakByAgent.clear();
+    this.autoplayBackoffUntilByAgent.clear();
+    this.godPriorityPendingByAgent.clear();
+    for (const agentId of agentIds) {
+      this.ensureAgentState(agentId);
+    }
+  }
+
+  private gameplayAgentIds(): string[] {
+    if (!this.simulation) {
+      return [];
+    }
+    return this.simulation
+      .getState()
+      .agents.map((agent) => agent.id)
+      .filter((id) => this.threadIds.gameplayByAgentId[id])
+      .sort();
+  }
+
+  private totalQueuedActions(): number {
+    let total = 0;
+    for (const queue of this.actionQueueByAgent.values()) {
+      total += queue.length;
+    }
+    return total;
+  }
+
   private async primeCodexModelCatalog(): Promise<void> {
     try {
       await this.ensureCodexConnected();
       await this.refreshModelCatalog();
-      if (this.simulation && !this.threadIds.gameplay && !this.threadIds.builder) {
+      if (this.simulation && Object.keys(this.threadIds.gameplayByAgentId).length === 0 && !this.threadIds.builder) {
         await this.startThreadsForExistingSession();
       }
     } catch (error) {
@@ -268,17 +337,31 @@ export class GameRuntimeServer {
   }
 
   private async startThreadsForExistingSession(): Promise<void> {
-    const gameplay = await this.codexClient.request("thread/start", {
-      cwd: runtimeConfig.codexCwd,
-      approvalPolicy: "never"
-    });
+    if (!this.simulation) {
+      return;
+    }
+    const gameplayByAgentId: Record<string, string> = {};
+    for (const agent of this.simulation.getState().agents) {
+      this.ensureAgentState(agent.id);
+      if (!this.agentConfigs.has(agent.id)) {
+        this.agentConfigs.set(agent.id, { id: agent.id, name: agent.name });
+      }
+      const gameplay = await this.codexClient.request("thread/start", {
+        cwd: runtimeConfig.codexCwd,
+        approvalPolicy: "never"
+      });
+      const threadId = ensureThreadId(gameplay);
+      gameplayByAgentId[agent.id] = threadId;
+      this.threadToAgentId.set(threadId, agent.id);
+    }
+
     const builder = await this.codexClient.request("thread/start", {
       cwd: runtimeConfig.codexCwd,
       approvalPolicy: "never"
     });
 
     this.threadIds = {
-      gameplay: ensureThreadId(gameplay),
+      gameplayByAgentId,
       builder: ensureThreadId(builder)
     };
     this.sendSessionState();
@@ -304,31 +387,49 @@ export class GameRuntimeServer {
       case "session.reset":
         await this.resetSession(message.payload.seed);
         return;
-      case "god.send":
-        this.godQueue.push(message.payload.text);
-        this.godPriorityPending = true;
-        this.actionQueue = [];
-        if (this.activeTurnId && this.threadIds.gameplay) {
-          const turnId = this.activeTurnId;
-          this.interruptedTurnIds.add(turnId);
-          void this.codexClient
-            .request("turn/interrupt", {
-              threadId: this.threadIds.gameplay,
-              turnId
-            })
-            .catch(() => {
-              this.interruptedTurnIds.delete(turnId);
-            });
+      case "god.send": {
+        const targets = message.payload.targetAgentId
+          ? [message.payload.targetAgentId]
+          : this.simulation?.getState().agents.map((agent) => agent.id) ?? [];
+
+        for (const targetAgentId of targets) {
+          this.ensureAgentState(targetAgentId);
+          this.godQueueByAgent.get(targetAgentId)?.push(message.payload.text);
+          this.godPriorityPendingByAgent.set(targetAgentId, true);
+          this.actionQueueByAgent.set(targetAgentId, []);
         }
+
+        if (this.activeTurn) {
+          const shouldInterrupt =
+            !message.payload.targetAgentId || message.payload.targetAgentId === this.activeTurn.agentId;
+          if (shouldInterrupt) {
+            const turnId = this.activeTurn.turnId;
+            this.interruptedTurnIds.add(turnId);
+            const threadId = this.threadIds.gameplayByAgentId[this.activeTurn.agentId];
+            if (threadId) {
+              void this.codexClient
+                .request("turn/interrupt", {
+                  threadId,
+                  turnId
+                })
+                .catch(() => {
+                  this.interruptedTurnIds.delete(turnId);
+                });
+            }
+          }
+        }
+
         this.emitMessage({
           version: PROTOCOL_VERSION,
           type: "agent.feed",
           payload: {
             role: "god",
-            text: message.payload.text
+            text: message.payload.text,
+            ...(message.payload.targetAgentId ? { agentId: message.payload.targetAgentId } : {})
           }
         });
         return;
+      }
       case "build.request": {
         const result = await this.runBuildRequest(message.payload.goal);
         this.emitMessage({
@@ -357,44 +458,74 @@ export class GameRuntimeServer {
       return;
     }
 
+    const agents = uniqueAgents(payload.agents);
+    if (agents.length === 0 || agents.length > 4) {
+      this.emitError("invalid_agents", "Session must include between 1 and 4 unique agents.", false);
+      return;
+    }
+
     this.phase = "starting";
     this.seed = payload.seed ?? this.preparedSeed ?? randomSeed();
     this.preparedSeed = null;
-    this.actionQueue = [];
-    this.godQueue = [];
-    this.invalidStreak = 0;
-    this.activeTurnId = null;
-    this.threadIds = {};
+    this.threadToAgentId.clear();
+    this.schedulerIndex = 0;
+    this.activeTurn = null;
+    this.interruptedTurnIds.clear();
+    this.pendingTurns.clear();
+    this.agentConfigs.clear();
+    for (const agent of agents) {
+      this.agentConfigs.set(agent.id, agent);
+    }
+    this.threadIds = { gameplayByAgentId: {} };
+    this.resetAgentLoopState(agents.map((agent) => agent.id));
+
     this.paused = false;
-    this.turnModel = payload.model?.trim() ? payload.model.trim() : (process.env.CODEXGAME_MODEL ?? null);
+    this.turnModel = payload.model?.trim() ? payload.model.trim() : process.env.CODEXGAME_MODEL ?? null;
     this.turnEffort = parseTurnEffort(payload.effort ?? process.env.CODEXGAME_EFFORT);
     this.sendSessionState();
 
     try {
       const content = this.contentStore.getContent();
-      this.simulation = new Simulation(this.seed, DEFAULT_WORLD_SIZE, DEFAULT_WORLD_SIZE, content);
+      this.simulation = new Simulation(
+        this.seed,
+        DEFAULT_WORLD_SIZE,
+        DEFAULT_WORLD_SIZE,
+        content,
+        agents.map((agent) => ({ id: agent.id, name: agent.name }))
+      );
 
       await this.ensureCodexConnected();
       await this.refreshModelCatalog();
 
-      const gameplay = await this.codexClient.request("thread/start", {
-        cwd: runtimeConfig.codexCwd,
-        approvalPolicy: "never"
-      });
+      const gameplayByAgentId: Record<string, string> = {};
+      for (const agent of agents) {
+        const gameplay = await this.codexClient.request("thread/start", {
+          cwd: runtimeConfig.codexCwd,
+          approvalPolicy: "never"
+        });
+        const threadId = ensureThreadId(gameplay);
+        gameplayByAgentId[agent.id] = threadId;
+        this.threadToAgentId.set(threadId, agent.id);
+      }
+
       const builder = await this.codexClient.request("thread/start", {
         cwd: runtimeConfig.codexCwd,
         approvalPolicy: "never"
       });
 
       this.threadIds = {
-        gameplay: ensureThreadId(gameplay),
+        gameplayByAgentId,
         builder: ensureThreadId(builder)
       };
 
       this.phase = "running";
       this.sendSessionState();
       this.sendWorldSnapshot();
-      await this.logReplay("session.started", { seed: this.seed, threadIds: this.threadIds as Record<string, unknown> });
+      await this.logReplay("session.started", {
+        seed: this.seed,
+        agentIds: agents.map((agent) => agent.id),
+        threadIds: this.threadIds as Record<string, unknown>
+      });
     } catch (error) {
       this.phase = "error";
       this.emitError("session_start_failed", (error as Error).message, true);
@@ -409,13 +540,12 @@ export class GameRuntimeServer {
     this.paused = false;
     this.seed = 0;
     this.preparedSeed = typeof seed === "number" ? seed : randomSeed();
-    this.threadIds = {};
-    this.actionQueue = [];
-    this.godQueue = [];
-    this.activeTurnId = null;
-    this.invalidStreak = 0;
-    this.godPriorityPending = false;
-    this.autoplayBackoffUntil = 0;
+    this.threadIds = { gameplayByAgentId: {} };
+    this.threadToAgentId.clear();
+    this.agentConfigs.clear();
+    this.activeTurn = null;
+    this.schedulerIndex = 0;
+    this.resetAgentLoopState([]);
     this.reasoningBuffers.clear();
     this.interruptedTurnIds.clear();
     this.metrics.setQueueDepth(0);
@@ -430,15 +560,20 @@ export class GameRuntimeServer {
     }
 
     if (this.paused) {
-      this.metrics.setQueueDepth(this.actionQueue.length);
+      this.metrics.setQueueDepth(this.totalQueuedActions());
       return;
     }
 
     this.simulation.tick();
 
-    const nextAction = this.actionQueue.shift();
-    if (nextAction) {
-      const result = this.simulation.applyAction(nextAction);
+    const agents = this.simulation.getState().agents.map((agent) => agent.id).sort();
+    for (const agentId of agents) {
+      const queue = this.actionQueueByAgent.get(agentId);
+      const nextAction = queue?.shift();
+      if (!nextAction) {
+        continue;
+      }
+      const result = this.simulation.applyAction(agentId, nextAction);
       if (result.result === "applied") {
         this.metrics.onActionApplied();
       } else {
@@ -448,42 +583,80 @@ export class GameRuntimeServer {
         version: PROTOCOL_VERSION,
         type: "agent.action",
         payload: {
+          agentId,
           action: result.action,
           result: result.result,
           ...(result.reason ? { reason: result.reason } : {})
         }
       });
       void this.logReplay("action.applied", {
+        agentId,
         action: result.action,
         result: result.result,
         reason: result.reason ?? null
       });
     }
 
-    this.metrics.setQueueDepth(this.actionQueue.length);
+    this.metrics.setQueueDepth(this.totalQueuedActions());
     this.sendWorldSnapshot();
+  }
+
+  private nextSchedulableAgentId(): string | null {
+    if (!this.simulation) {
+      return null;
+    }
+
+    const agents = this.simulation
+      .getState()
+      .agents.filter((agent) => agent.alive && this.threadIds.gameplayByAgentId[agent.id])
+      .sort((a, b) => a.id.localeCompare(b.id));
+
+    if (agents.length === 0) {
+      return null;
+    }
+
+    for (let pass = 0; pass < agents.length; pass += 1) {
+      const index = (this.schedulerIndex + pass) % agents.length;
+      const candidate = agents[index];
+      if (!candidate) {
+        continue;
+      }
+      const agentId = candidate.id;
+      const backoffUntil = this.autoplayBackoffUntilByAgent.get(agentId) ?? 0;
+      if (Date.now() < backoffUntil) {
+        continue;
+      }
+      const queueDepth = this.actionQueueByAgent.get(agentId)?.length ?? 0;
+      const hasGodPriority = this.godPriorityPendingByAgent.get(agentId) ?? false;
+      if (!hasGodPriority && queueDepth > runtimeConfig.maxQueuedActionsBeforeTurn) {
+        continue;
+      }
+      this.schedulerIndex = (index + 1) % agents.length;
+      return agentId;
+    }
+
+    return null;
   }
 
   private async runScheduler(): Promise<void> {
     if (!this.simulation || this.phase !== "running" || this.paused) {
       return;
     }
-    if (!this.connected || !this.threadIds.gameplay) {
+    if (!this.connected) {
       return;
     }
-    if (Date.now() < this.autoplayBackoffUntil) {
+    if (this.activeTurn || this.autoplayLocked) {
       return;
     }
-    if (this.activeTurnId || this.autoplayLocked) {
-      return;
-    }
-    if (!this.godPriorityPending && this.actionQueue.length > runtimeConfig.maxQueuedActionsBeforeTurn) {
+
+    const agentId = this.nextSchedulableAgentId();
+    if (!agentId) {
       return;
     }
 
     this.autoplayLocked = true;
     try {
-      await this.requestGameplayTurn(false, "");
+      await this.requestGameplayTurn(agentId, false, "");
     } catch (error) {
       const message = (error as Error).message.toLowerCase();
       if (!message.includes("interrupted")) {
@@ -494,33 +667,37 @@ export class GameRuntimeServer {
     }
   }
 
-  private async requestGameplayTurn(isRetry: boolean, previousText: string): Promise<void> {
-    if (!this.simulation || !this.threadIds.gameplay) {
+  private async requestGameplayTurn(agentId: string, isRetry: boolean, previousText: string): Promise<void> {
+    if (!this.simulation) {
+      return;
+    }
+
+    const threadId = this.threadIds.gameplayByAgentId[agentId];
+    if (!threadId) {
       return;
     }
 
     const snapshot = this.simulation.getSnapshot();
-    const godMessages = [...this.godQueue];
-    this.godQueue = [];
+    const godMessages = [...(this.godQueueByAgent.get(agentId) ?? [])];
+    this.godQueueByAgent.set(agentId, []);
     const content = this.contentStore.getContent();
 
     const prompt = isRetry
       ? buildValidationRetryPrompt(previousText)
-      : buildGameplayPrompt(snapshot, godMessages, content);
+      : buildGameplayPrompt(snapshot, agentId, godMessages, content);
 
     let turn: CompletedTurn;
     try {
       turn = await this.startTurnAndWait({
-        threadId: this.threadIds.gameplay,
+        agentId,
+        threadId,
         prompt,
         outputSchema: agentTurnOutputJsonSchema
       });
     } catch (error) {
       const message = (error as Error).message.toLowerCase();
-      if (message.includes("interrupted")) {
-        if (godMessages.length > 0) {
-          this.godQueue = [...godMessages, ...this.godQueue];
-        }
+      if (message.includes("interrupted") && godMessages.length > 0) {
+        this.godQueueByAgent.set(agentId, [...godMessages, ...(this.godQueueByAgent.get(agentId) ?? [])]);
       }
       throw error;
     }
@@ -532,9 +709,9 @@ export class GameRuntimeServer {
       parsed = agentTurnOutputSchema.parse(JSON.parse(turn.text));
     } catch {
       this.metrics.onInvalidOutput();
-      this.invalidStreak += 1;
+      this.invalidStreakByAgent.set(agentId, (this.invalidStreakByAgent.get(agentId) ?? 0) + 1);
       if (!isRetry) {
-        await this.requestGameplayTurn(true, turn.text);
+        await this.requestGameplayTurn(agentId, true, turn.text);
         return;
       }
 
@@ -543,38 +720,43 @@ export class GameRuntimeServer {
         type: "agent.feed",
         payload: {
           role: "system",
+          agentId,
           text: "Invalid agent output; inserting fallback wait action."
         }
       });
-      this.actionQueue.push({ type: "wait", ticks: 1 });
-      this.autoplayBackoffUntil = Date.now() + Math.min(30_000, this.invalidStreak * 1500);
+      this.actionQueueByAgent.get(agentId)?.push({ type: "wait", ticks: 1 });
+      const streak = this.invalidStreakByAgent.get(agentId) ?? 1;
+      this.autoplayBackoffUntilByAgent.set(agentId, Date.now() + Math.min(30_000, streak * 1500));
       return;
     }
 
-    this.invalidStreak = 0;
-    this.godPriorityPending = false;
+    this.invalidStreakByAgent.set(agentId, 0);
+    this.godPriorityPendingByAgent.set(agentId, false);
     this.emitMessage({
       version: PROTOCOL_VERSION,
       type: "agent.feed",
       payload: {
         role: "agent",
+        agentId,
         text: parsed.narration
       }
     });
 
     for (const action of parsed.actions) {
-      this.actionQueue.push(action);
+      this.actionQueueByAgent.get(agentId)?.push(action);
       this.emitMessage({
         version: PROTOCOL_VERSION,
         type: "agent.action",
         payload: {
+          agentId,
           action,
           result: "accepted"
         }
       });
     }
-    this.metrics.setQueueDepth(this.actionQueue.length);
+    this.metrics.setQueueDepth(this.totalQueuedActions());
     await this.logReplay("turn.actions_enqueued", {
+      agentId,
       turnId: turn.turnId,
       actions: parsed.actions as unknown as Record<string, unknown>[]
     });
@@ -593,6 +775,7 @@ export class GameRuntimeServer {
       const content = this.contentStore.getContent();
       const prompt = buildContentPrompt(goal, content);
       const turn = await this.startTurnAndWait({
+        agentId: "builder",
         threadId: this.threadIds.builder,
         prompt,
         outputSchema: buildOutputJsonSchema
@@ -638,37 +821,46 @@ export class GameRuntimeServer {
   }
 
   private async startTurnAndWait(args: {
+    agentId: string;
     threadId: string;
     prompt: string;
     outputSchema: Record<string, unknown>;
   }): Promise<CompletedTurn> {
+    const agentConfig = this.agentConfigs.get(args.agentId);
+    const model = agentConfig?.model ?? this.turnModel;
+    const effort = parseTurnEffort(agentConfig?.effort ?? this.turnEffort);
+
     const result = await this.codexClient.request("turn/start", {
       threadId: args.threadId,
       input: [{ type: "text", text: args.prompt }],
       cwd: runtimeConfig.codexCwd,
       approvalPolicy: "never",
-      model: this.turnModel,
-      effort: this.turnEffort,
+      model,
+      effort,
       outputSchema: args.outputSchema
     });
 
     const turnId = ensureTurnId(result);
-    this.activeTurnId = turnId;
+    this.activeTurn = { agentId: args.agentId, turnId };
 
-    this.emitMessage({
-      version: PROTOCOL_VERSION,
-      type: "agent.turn",
-      payload: {
-        turnId,
-        status: "started",
-        latencyMs: 0
-      }
-    });
+    if (args.agentId !== "builder") {
+      this.emitMessage({
+        version: PROTOCOL_VERSION,
+        type: "agent.turn",
+        payload: {
+          agentId: args.agentId,
+          turnId,
+          status: "started",
+          latencyMs: 0
+        }
+      });
+    }
 
     try {
       const completed = await new Promise<CompletedTurn>((resolve, reject) => {
         const startedAt = Date.now();
         const collector: PendingTurnCollector = {
+          agentId: args.agentId,
           threadId: args.threadId,
           turnId,
           startedAt,
@@ -703,34 +895,40 @@ export class GameRuntimeServer {
         };
       });
 
-      this.emitMessage({
-        version: PROTOCOL_VERSION,
-        type: "agent.turn",
-        payload: {
-          turnId,
-          status: "completed",
-          latencyMs: completed.latencyMs,
-          ...(completed.usage ? { usage: completed.usage } : {})
-        }
-      });
+      if (args.agentId !== "builder") {
+        this.emitMessage({
+          version: PROTOCOL_VERSION,
+          type: "agent.turn",
+          payload: {
+            agentId: args.agentId,
+            turnId,
+            status: "completed",
+            latencyMs: completed.latencyMs,
+            ...(completed.usage ? { usage: completed.usage } : {})
+          }
+        });
+      }
 
       return completed;
     } catch (error) {
-      const message = (error as Error).message.toLowerCase();
-      const status = message.includes("interrupted") ? "interrupted" : "failed";
-      this.emitMessage({
-        version: PROTOCOL_VERSION,
-        type: "agent.turn",
-        payload: {
-          turnId,
-          status,
-          latencyMs: 0
-        }
-      });
+      if (args.agentId !== "builder") {
+        const message = (error as Error).message.toLowerCase();
+        const status = message.includes("interrupted") ? "interrupted" : "failed";
+        this.emitMessage({
+          version: PROTOCOL_VERSION,
+          type: "agent.turn",
+          payload: {
+            agentId: args.agentId,
+            turnId,
+            status,
+            latencyMs: 0
+          }
+        });
+      }
       throw error;
     } finally {
-      if (this.activeTurnId === turnId) {
-        this.activeTurnId = null;
+      if (this.activeTurn?.turnId === turnId) {
+        this.activeTurn = null;
       }
     }
   }
@@ -744,12 +942,13 @@ export class GameRuntimeServer {
     const threadId = getThreadIdFromNotification(notification);
     const turnId = getTurnIdFromNotification(notification);
     const params = notification.params;
+    const gameplayAgentId = threadId ? this.threadToAgentId.get(threadId) : undefined;
 
     if (
       notification.method === "item/reasoning/summaryTextDelta" ||
       notification.method === "item/reasoning/textDelta"
     ) {
-      if (!threadId || threadId !== this.threadIds.gameplay) {
+      if (!gameplayAgentId) {
         return;
       }
       const itemId = String(params.itemId ?? params.item_id ?? "");
@@ -764,6 +963,7 @@ export class GameRuntimeServer {
         type: "agent.feed",
         payload: {
           role: "reasoning",
+          agentId: gameplayAgentId,
           text: delta
         }
       });
@@ -771,7 +971,7 @@ export class GameRuntimeServer {
     }
 
     if (notification.method === "item/reasoning/summaryPartAdded") {
-      if (!threadId || threadId !== this.threadIds.gameplay) {
+      if (!gameplayAgentId) {
         return;
       }
       const itemId = String(params.itemId ?? params.item_id ?? "");
@@ -783,6 +983,7 @@ export class GameRuntimeServer {
         type: "agent.feed",
         payload: {
           role: "reasoning",
+          agentId: gameplayAgentId,
           text: " "
         }
       });
@@ -804,16 +1005,17 @@ export class GameRuntimeServer {
 
     if (notification.method === "item/started") {
       const item = params.item as Record<string, unknown> | undefined;
-      if (!item) {
+      if (!item || !gameplayAgentId) {
         return;
       }
       const itemType = String(item.type ?? "");
-      if (itemType === "reasoning" && threadId && threadId === this.threadIds.gameplay) {
+      if (itemType === "reasoning") {
         this.emitMessage({
           version: PROTOCOL_VERSION,
           type: "agent.feed",
           payload: {
             role: "reasoning",
+            agentId: gameplayAgentId,
             text: "..."
           }
         });
@@ -895,7 +1097,8 @@ export class GameRuntimeServer {
           collector.reject(new Error(message));
         }
       }
-      if (threadId === this.threadIds.gameplay || threadId === this.threadIds.builder) {
+      const isGameplayThread = !!(threadId && this.threadToAgentId.has(threadId));
+      if (isGameplayThread || threadId === this.threadIds.builder) {
         this.emitError("codex_turn_error", message, true);
       }
     }
@@ -931,8 +1134,8 @@ export class GameRuntimeServer {
   private async reconnect(): Promise<void> {
     try {
       await this.codexClient.restart({ codexBin: runtimeConfig.codexBin, cwd: runtimeConfig.codexCwd });
-      if (this.threadIds.gameplay) {
-        await this.codexClient.request("thread/resume", { threadId: this.threadIds.gameplay });
+      for (const threadId of Object.values(this.threadIds.gameplayByAgentId)) {
+        await this.codexClient.request("thread/resume", { threadId });
       }
       if (this.threadIds.builder) {
         await this.codexClient.request("thread/resume", { threadId: this.threadIds.builder });
@@ -1002,6 +1205,11 @@ export class GameRuntimeServer {
       type: "world.snapshot",
       payload: {
         ...snapshot,
+        agents: snapshot.agents.map((agent) => ({
+          ...agent,
+          model: this.agentConfigs.get(agent.id)?.model ?? this.turnModel,
+          effort: parseTurnEffort(this.agentConfigs.get(agent.id)?.effort ?? this.turnEffort)
+        })),
         catalog: {
           prefabs: content.prefabs.map((prefab) => ({
             id: prefab.id,
@@ -1036,7 +1244,6 @@ export class GameRuntimeServer {
     const sessionSnapshot: SessionSnapshot = {
       seed: this.seed,
       tick: snapshot.tick,
-      actor: snapshot.actor,
       threadIds: this.threadIds,
       metrics: this.metrics.snapshot(),
       simulation: simulationState
@@ -1054,49 +1261,27 @@ export class GameRuntimeServer {
     if (saved.simulation) {
       this.simulation = Simulation.fromState(saved.simulation, content);
       this.seed = saved.simulation.seed;
+      for (const agent of saved.simulation.agents ?? []) {
+        this.agentConfigs.set(agent.id, { id: agent.id, name: agent.name });
+      }
+      this.resetAgentLoopState((saved.simulation.agents ?? []).map((agent) => agent.id));
     } else if (typeof saved.seed === "number") {
-      this.simulation = new Simulation(saved.seed, DEFAULT_WORLD_SIZE, DEFAULT_WORLD_SIZE, content);
+      this.simulation = new Simulation(saved.seed, DEFAULT_WORLD_SIZE, DEFAULT_WORLD_SIZE, content, [
+        { id: "agent-1", name: "Agent 1" }
+      ]);
       this.seed = saved.seed;
-      const state = this.simulation.getState();
-      if (typeof saved.tick === "number" && Number.isFinite(saved.tick)) {
-        state.tick = Math.max(0, Math.floor(saved.tick));
-      }
-      const actor = saved.actor;
-      if (actor && typeof actor === "object") {
-        if (typeof actor.x === "number") {
-          state.actor.x = Math.max(0, Math.min(state.width - 1, Math.floor(actor.x)));
-        }
-        if (typeof actor.y === "number") {
-          state.actor.y = Math.max(0, Math.min(state.height - 1, Math.floor(actor.y)));
-        }
-        if (
-          actor.facing === "N" ||
-          actor.facing === "NE" ||
-          actor.facing === "E" ||
-          actor.facing === "SE" ||
-          actor.facing === "S" ||
-          actor.facing === "SW" ||
-          actor.facing === "W" ||
-          actor.facing === "NW"
-        ) {
-          state.actor.facing = actor.facing;
-        }
-        if (typeof actor.stamina === "number" && Number.isFinite(actor.stamina)) {
-          state.actor.stamina = Math.max(0, Math.min(100, Math.floor(actor.stamina)));
-        }
-      }
+      this.agentConfigs.set("agent-1", { id: "agent-1", name: "Agent 1" });
+      this.resetAgentLoopState(["agent-1"]);
     } else {
       return;
     }
 
     this.phase = "running";
     this.preparedSeed = null;
-    this.threadIds = {};
-    this.actionQueue = [];
-    this.godQueue = [];
-    this.activeTurnId = null;
-    this.invalidStreak = 0;
-    this.godPriorityPending = false;
+    this.threadIds = { gameplayByAgentId: {} };
+    this.threadToAgentId.clear();
+    this.activeTurn = null;
+    this.schedulerIndex = 0;
     await this.logReplay("session.restored", {
       seed: this.seed,
       tick: this.simulation.getState().tick
@@ -1104,22 +1289,22 @@ export class GameRuntimeServer {
   }
 
   private async interruptActiveTurn(): Promise<void> {
-    const turnId = this.activeTurnId;
-    if (!turnId) {
+    const activeTurn = this.activeTurn;
+    if (!activeTurn) {
       return;
     }
-    const collector = this.pendingTurns.get(turnId);
+    const collector = this.pendingTurns.get(activeTurn.turnId);
     if (!collector) {
       return;
     }
-    this.interruptedTurnIds.add(turnId);
+    this.interruptedTurnIds.add(activeTurn.turnId);
     try {
       await this.codexClient.request("turn/interrupt", {
         threadId: collector.threadId,
-        turnId
+        turnId: activeTurn.turnId
       });
     } catch {
-      this.interruptedTurnIds.delete(turnId);
+      this.interruptedTurnIds.delete(activeTurn.turnId);
     }
   }
 

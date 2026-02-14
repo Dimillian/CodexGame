@@ -1,5 +1,5 @@
 import type { AgentAction, Direction } from "@codexgame/protocol";
-import type { ActionResult, ContentSet, CreatureEntity, SimulationState, WorldSnapshot } from "./types";
+import type { ActionResult, AgentConfig, AgentState, ContentSet, CreatureEntity, SimulationState, WorldSnapshot } from "./types";
 import { createInitialState, isBlocked } from "./world";
 import { buildSnapshot } from "./snapshot";
 
@@ -105,27 +105,52 @@ function defaultCreatureCombat(subtype: string): Pick<
   };
 }
 
-function hydrateLegacyCombatState(state: SimulationState): void {
-  const actor = state.actor as typeof state.actor & {
-    hp?: number;
-    maxHp?: number;
-    attack?: number;
-    defense?: number;
-    attackRange?: number;
-    cooldownTicks?: number;
-    maxCooldownTicks?: number;
-    alive?: boolean;
+function ensureAgentDefaults(agent: AgentState): AgentState {
+  const maxHp = Number.isFinite(agent.maxHp) ? Math.max(1, Math.floor(agent.maxHp)) : 32;
+  const hp = Number.isFinite(agent.hp) ? Math.max(0, Math.min(maxHp, Math.floor(agent.hp))) : maxHp;
+  const maxCooldownTicks = Number.isFinite(agent.maxCooldownTicks) ? Math.max(1, Math.floor(agent.maxCooldownTicks)) : 2;
+
+  return {
+    ...agent,
+    maxHp,
+    hp,
+    attack: Number.isFinite(agent.attack) ? Math.max(1, Math.floor(agent.attack)) : 4,
+    defense: Number.isFinite(agent.defense) ? Math.max(0, Math.floor(agent.defense)) : 2,
+    attackRange: Number.isFinite(agent.attackRange) ? Math.max(1, Math.floor(agent.attackRange)) : 1,
+    maxCooldownTicks,
+    cooldownTicks: Number.isFinite(agent.cooldownTicks)
+      ? Math.max(0, Math.min(maxCooldownTicks, Math.floor(agent.cooldownTicks)))
+      : 0,
+    alive: typeof agent.alive === "boolean" ? agent.alive : hp > 0,
+    inventory: { ...agent.inventory },
+    relations: { ...(agent.relations ?? {}) },
+    inbox: Array.isArray(agent.inbox) ? [...agent.inbox] : []
   };
-  actor.maxHp = Number.isFinite(actor.maxHp) ? Math.max(1, Math.floor(actor.maxHp)) : 32;
-  actor.hp = Number.isFinite(actor.hp) ? Math.max(0, Math.min(actor.maxHp, Math.floor(actor.hp))) : actor.maxHp;
-  actor.attack = Number.isFinite(actor.attack) ? Math.max(1, Math.floor(actor.attack)) : 4;
-  actor.defense = Number.isFinite(actor.defense) ? Math.max(0, Math.floor(actor.defense)) : 2;
-  actor.attackRange = Number.isFinite(actor.attackRange) ? Math.max(1, Math.floor(actor.attackRange)) : 1;
-  actor.maxCooldownTicks = Number.isFinite(actor.maxCooldownTicks) ? Math.max(1, Math.floor(actor.maxCooldownTicks)) : 2;
-  actor.cooldownTicks = Number.isFinite(actor.cooldownTicks)
-    ? Math.max(0, Math.min(actor.maxCooldownTicks, Math.floor(actor.cooldownTicks)))
-    : 0;
-  actor.alive = typeof actor.alive === "boolean" ? actor.alive : actor.hp > 0;
+}
+
+function hydrateLegacyCombatState(state: SimulationState): void {
+  const maybeLegacy = state as SimulationState & { actor?: Omit<AgentState, "name"> & { name?: string } };
+  if ((!state.agents || state.agents.length === 0) && maybeLegacy.actor) {
+    state.agents = [
+      ensureAgentDefaults({
+        ...maybeLegacy.actor,
+        name: maybeLegacy.actor.name ?? "Agent 1"
+      })
+    ];
+  } else {
+    state.agents = state.agents.map((agent) => ensureAgentDefaults(agent));
+  }
+  const agentIds = state.agents.map((agent) => agent.id);
+  for (const agent of state.agents) {
+    for (const otherId of agentIds) {
+      if (otherId === agent.id) {
+        continue;
+      }
+      if (!agent.relations[otherId]) {
+        agent.relations[otherId] = "neutral";
+      }
+    }
+  }
 
   for (const entity of state.entities) {
     if (entity.type !== "creature") {
@@ -179,11 +204,17 @@ function cloneState(state: SimulationState): SimulationState {
     tiles: state.tiles.map((row) => row.map((tile) => ({ terrain: tile.terrain }))),
     entities: state.entities.map((entity) => ({ ...entity })),
     placements: state.placements.map((placement) => ({ ...placement })),
-    actor: {
-      ...state.actor,
-      inventory: { ...state.actor.inventory }
-    }
+    agents: state.agents.map((agent) => ({
+      ...agent,
+      inventory: { ...agent.inventory },
+      relations: { ...agent.relations },
+      inbox: [...agent.inbox]
+    }))
   };
+}
+
+function defaultAgents(): AgentConfig[] {
+  return [{ id: "agent-1", name: "Agent 1" }];
 }
 
 export class Simulation {
@@ -193,13 +224,13 @@ export class Simulation {
 
   private placementSequence = 0;
 
-  public constructor(seed: number, width: number, height: number, content: ContentSet) {
+  public constructor(seed: number, width: number, height: number, content: ContentSet, agentConfigs: AgentConfig[] = defaultAgents()) {
     this.content = content;
-    this.state = createInitialState(seed, width, height, content);
+    this.state = createInitialState(seed, width, height, content, agentConfigs);
   }
 
   public static fromState(state: SimulationState, content: ContentSet): Simulation {
-    const simulation = new Simulation(state.seed, state.width, state.height, content);
+    const simulation = new Simulation(state.seed, state.width, state.height, content, state.agents);
     simulation.state = cloneState(state);
     hydrateLegacyCombatState(simulation.state);
     simulation.placementSequence = state.placements.length;
@@ -220,125 +251,131 @@ export class Simulation {
 
   public tick(): void {
     this.state.tick += 1;
-    if (this.state.actor.cooldownTicks > 0) {
-      this.state.actor.cooldownTicks -= 1;
+    for (const agent of this.state.agents) {
+      if (agent.cooldownTicks > 0) {
+        agent.cooldownTicks -= 1;
+      }
     }
     this.tickCreatureAi();
   }
 
-  public applyAction(action: AgentAction): ActionResult {
-    if (!this.state.actor.alive) {
-      return { action, result: "rejected", reason: "actor_dead" };
+  public applyAction(agentId: string, action: AgentAction): ActionResult {
+    const agent = this.state.agents.find((item) => item.id === agentId);
+    if (!agent) {
+      return { agentId, action, result: "rejected", reason: "agent_not_found" };
+    }
+
+    if (!agent.alive) {
+      return { agentId, action, result: "rejected", reason: "actor_dead" };
     }
 
     switch (action.type) {
       case "move": {
-        this.state.actor.facing = action.direction;
+        agent.facing = action.direction;
         const stepVector = directionVector[action.direction];
         for (let step = 0; step < action.steps; step += 1) {
-          const nextX = this.state.actor.x + stepVector.dx;
-          const nextY = this.state.actor.y + stepVector.dy;
-          if (isBlocked(this.state, nextX, nextY, this.content)) {
+          const nextX = agent.x + stepVector.dx;
+          const nextY = agent.y + stepVector.dy;
+          if (isBlocked(this.state, nextX, nextY, this.content, { ignoreAgentId: agentId })) {
             return {
+              agentId,
               action,
               result: "rejected",
               reason: "blocked"
             };
           }
-          this.state.actor.x = nextX;
-          this.state.actor.y = nextY;
+          agent.x = nextX;
+          agent.y = nextY;
         }
-        this.state.actor.stamina = Math.max(0, this.state.actor.stamina - action.steps * 2);
-        return { action, result: "applied" };
+        agent.stamina = Math.max(0, agent.stamina - action.steps * 2);
+        return { agentId, action, result: "applied" };
       }
       case "interact": {
         const entity = this.state.entities.find((item) => item.id === action.targetId);
         if (!entity) {
-          return { action, result: "rejected", reason: "target_not_found" };
+          return { agentId, action, result: "rejected", reason: "target_not_found" };
         }
         if (entity.type === "creature") {
-          return { action, result: "rejected", reason: "use_attack_action" };
+          return { agentId, action, result: "rejected", reason: "use_attack_action" };
         }
-        if (!adjacent(this.state.actor.x, this.state.actor.y, entity.x, entity.y)) {
-          return { action, result: "rejected", reason: "target_not_reachable" };
+        if (!adjacent(agent.x, agent.y, entity.x, entity.y)) {
+          return { agentId, action, result: "rejected", reason: "target_not_reachable" };
         }
-        return { action, result: "applied" };
+        return { agentId, action, result: "applied" };
       }
       case "gather": {
         const entity = this.state.entities.find((item) => item.id === action.targetId && item.type === "resource");
         if (!entity) {
-          return { action, result: "rejected", reason: "resource_not_found" };
+          return { agentId, action, result: "rejected", reason: "resource_not_found" };
         }
-        if (!adjacent(this.state.actor.x, this.state.actor.y, entity.x, entity.y)) {
-          return { action, result: "rejected", reason: "resource_not_reachable" };
+        if (!adjacent(agent.x, agent.y, entity.x, entity.y)) {
+          return { agentId, action, result: "rejected", reason: "resource_not_reachable" };
         }
         if (entity.quantity <= 0) {
-          return { action, result: "rejected", reason: "resource_depleted" };
+          return { agentId, action, result: "rejected", reason: "resource_depleted" };
         }
-        addInventory(this.state.actor.inventory, entity.subtype, 1);
+        addInventory(agent.inventory, entity.subtype, 1);
         entity.quantity -= 1;
         if (entity.quantity <= 0) {
           this.state.entities = this.state.entities.filter((item) => item.id !== entity.id);
         }
-        return { action, result: "applied" };
+        return { agentId, action, result: "applied" };
       }
       case "attack": {
         const target = this.state.entities.find(
           (item): item is CreatureEntity => item.id === action.targetId && item.type === "creature"
         );
         if (!target) {
-          return { action, result: "rejected", reason: "target_not_attackable" };
+          return { agentId, action, result: "rejected", reason: "target_not_attackable" };
         }
-        if (this.state.actor.cooldownTicks > 0) {
-          return { action, result: "rejected", reason: "attack_cooldown" };
+        if (agent.cooldownTicks > 0) {
+          return { agentId, action, result: "rejected", reason: "attack_cooldown" };
         }
-        const distance = manhattanDistance(this.state.actor.x, this.state.actor.y, target.x, target.y);
-        if (distance > this.state.actor.attackRange) {
-          return { action, result: "rejected", reason: "target_not_in_range" };
+        const distance = manhattanDistance(agent.x, agent.y, target.x, target.y);
+        if (distance > agent.attackRange) {
+          return { agentId, action, result: "rejected", reason: "target_not_in_range" };
         }
-        const damage = computeDamage(this.state.actor.attack, target.defense);
+        const damage = computeDamage(agent.attack, target.defense);
         target.hp = Math.max(0, target.hp - damage);
         target.behaviorState = "attack";
-        this.state.actor.cooldownTicks = this.state.actor.maxCooldownTicks;
-        this.state.actor.stamina = Math.max(0, this.state.actor.stamina - ATTACK_STAMINA_COST);
+        agent.cooldownTicks = agent.maxCooldownTicks;
+        agent.stamina = Math.max(0, agent.stamina - ATTACK_STAMINA_COST);
         if (target.hp <= 0) {
           this.state.entities = this.state.entities.filter((item) => item.id !== target.id);
         }
-        return { action, result: "applied" };
+        return { agentId, action, result: "applied" };
       }
       case "craft": {
         const recipe = this.content.recipes.find((item) => item.id === action.recipeId);
         if (!recipe) {
-          return { action, result: "rejected", reason: "recipe_not_found" };
+          return { agentId, action, result: "rejected", reason: "recipe_not_found" };
         }
-        const hasAll = recipe.input.every(
-          (ingredient) => (this.state.actor.inventory[ingredient.item] ?? 0) >= ingredient.count
-        );
+        const hasAll = recipe.input.every((ingredient) => (agent.inventory[ingredient.item] ?? 0) >= ingredient.count);
         if (!hasAll) {
-          return { action, result: "rejected", reason: "missing_ingredients" };
+          return { agentId, action, result: "rejected", reason: "missing_ingredients" };
         }
         for (const ingredient of recipe.input) {
-          addInventory(this.state.actor.inventory, ingredient.item, -ingredient.count);
+          addInventory(agent.inventory, ingredient.item, -ingredient.count);
         }
-        addInventory(this.state.actor.inventory, recipe.output.item, recipe.output.count);
-        return { action, result: "applied" };
+        addInventory(agent.inventory, recipe.output.item, recipe.output.count);
+        return { agentId, action, result: "applied" };
       }
       case "place": {
-        if (isBlocked(this.state, action.x, action.y, this.content)) {
-          return { action, result: "rejected", reason: "placement_blocked" };
+        if (isBlocked(this.state, action.x, action.y, this.content, { ignoreAgentId: agentId })) {
+          return { agentId, action, result: "rejected", reason: "placement_blocked" };
         }
         const prefab = this.content.prefabs.find((item) => item.id === action.prefabId);
         if (!prefab) {
-          return { action, result: "rejected", reason: "prefab_not_found" };
+          return { agentId, action, result: "rejected", reason: "prefab_not_found" };
         }
         if (prefab.kind !== "structure") {
-          return { action, result: "rejected", reason: "prefab_not_placeable" };
+          return { agentId, action, result: "rejected", reason: "prefab_not_placeable" };
         }
-        const available = this.state.actor.inventory[action.prefabId] ?? 0;
+        const available = agent.inventory[action.prefabId] ?? 0;
         if (available < 1) {
-          return { action, result: "rejected", reason: "missing_prefab_item" };
+          return { agentId, action, result: "rejected", reason: "missing_prefab_item" };
         }
-        addInventory(this.state.actor.inventory, action.prefabId, -1);
+        addInventory(agent.inventory, action.prefabId, -1);
         this.state.placements.push({
           id: `placement-${this.state.tick}-${this.placementSequence}`,
           prefabId: action.prefabId,
@@ -346,15 +383,61 @@ export class Simulation {
           y: action.y
         });
         this.placementSequence += 1;
-        return { action, result: "applied" };
+        return { agentId, action, result: "applied" };
       }
       case "wait": {
-        this.state.actor.stamina = Math.min(100, this.state.actor.stamina + action.ticks * 2);
-        return { action, result: "applied" };
+        agent.stamina = Math.min(100, agent.stamina + action.ticks * 2);
+        return { agentId, action, result: "applied" };
+      }
+      case "talk": {
+        const recipient = this.state.agents.find((item) => item.id === action.toAgentId);
+        if (!recipient) {
+          return { agentId, action, result: "rejected", reason: "recipient_not_found" };
+        }
+        if (recipient.id === agentId) {
+          return { agentId, action, result: "rejected", reason: "cannot_talk_to_self" };
+        }
+        recipient.inbox.push({
+          fromAgentId: agentId,
+          message: action.message,
+          tick: this.state.tick
+        });
+        if (recipient.inbox.length > 20) {
+          recipient.inbox = recipient.inbox.slice(-20);
+        }
+        return { agentId, action, result: "applied" };
+      }
+      case "set_relation": {
+        const target = this.state.agents.find((item) => item.id === action.targetAgentId);
+        if (!target) {
+          return { agentId, action, result: "rejected", reason: "target_agent_not_found" };
+        }
+        if (target.id === agentId) {
+          return { agentId, action, result: "rejected", reason: "cannot_set_self_relation" };
+        }
+        agent.relations[target.id] = action.relation;
+        return { agentId, action, result: "applied" };
       }
       default:
-        return { action, result: "rejected", reason: "unsupported_action" };
+        return { agentId, action, result: "rejected", reason: "unsupported_action" };
     }
+  }
+
+  private aliveAgents(): AgentState[] {
+    return this.state.agents.filter((agent) => agent.alive).sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  private findCreatureTarget(creature: CreatureEntity): AgentState | null {
+    let best: AgentState | null = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const agent of this.aliveAgents()) {
+      const distance = manhattanDistance(agent.x, agent.y, creature.x, creature.y);
+      if (distance < bestDistance) {
+        best = agent;
+        bestDistance = distance;
+      }
+    }
+    return best;
   }
 
   private tickCreatureAi(): void {
@@ -372,7 +455,7 @@ export class Simulation {
       const canMoveThisTick = this.state.tick % CREATURE_MOVE_TICK_INTERVAL === movePhase;
       const canAttackThisTick = this.state.tick % CREATURE_ATTACK_TICK_INTERVAL === attackPhase;
 
-      if (!creature.hostile || !this.state.actor.alive) {
+      if (!creature.hostile || this.aliveAgents().length === 0) {
         creature.behaviorState = "idle";
         if (canMoveThisTick) {
           this.maybeWander(creature);
@@ -388,11 +471,17 @@ export class Simulation {
         continue;
       }
 
-      const distance = manhattanDistance(this.state.actor.x, this.state.actor.y, creature.x, creature.y);
+      const target = this.findCreatureTarget(creature);
+      if (!target) {
+        creature.behaviorState = "idle";
+        continue;
+      }
+
+      const distance = manhattanDistance(target.x, target.y, creature.x, creature.y);
       if (distance <= creature.attackRange) {
         creature.behaviorState = "attack";
         if (canAttackThisTick && attackersThisTick < MAX_CREATURE_ATTACKERS_PER_TICK && creature.cooldownTicks === 0) {
-          this.applyCreatureAttack(creature);
+          this.applyCreatureAttack(creature, target);
           attackersThisTick += 1;
         }
         continue;
@@ -401,7 +490,7 @@ export class Simulation {
       if (distance <= creature.aggroRange) {
         creature.behaviorState = "chase";
         if (canMoveThisTick) {
-          this.stepCreatureTowardActor(creature);
+          this.stepCreatureTowardAgent(creature, target);
         }
         continue;
       }
@@ -413,22 +502,22 @@ export class Simulation {
     }
   }
 
-  private applyCreatureAttack(creature: CreatureEntity): void {
-    if (!this.state.actor.alive) {
+  private applyCreatureAttack(creature: CreatureEntity, target: AgentState): void {
+    if (!target.alive) {
       return;
     }
-    const damage = computeDamage(creature.attack, this.state.actor.defense);
-    this.state.actor.hp = Math.max(0, this.state.actor.hp - damage);
-    this.state.actor.alive = this.state.actor.hp > 0;
+    const damage = computeDamage(creature.attack, target.defense);
+    target.hp = Math.max(0, target.hp - damage);
+    target.alive = target.hp > 0;
     creature.cooldownTicks = creature.maxCooldownTicks;
   }
 
-  private stepCreatureTowardActor(creature: CreatureEntity): void {
-    const dx = Math.sign(this.state.actor.x - creature.x);
-    const dy = Math.sign(this.state.actor.y - creature.y);
+  private stepCreatureTowardAgent(creature: CreatureEntity, target: AgentState): void {
+    const dx = Math.sign(target.x - creature.x);
+    const dy = Math.sign(target.y - creature.y);
 
     const axisBias = hashUnit(this.state.seed, this.state.tick, hashString(creature.id, 919), 193);
-    const xFirst = Math.abs(this.state.actor.x - creature.x) > Math.abs(this.state.actor.y - creature.y) || axisBias < 0.5;
+    const xFirst = Math.abs(target.x - creature.x) > Math.abs(target.y - creature.y) || axisBias < 0.5;
 
     const candidates: Array<{ x: number; y: number }> = [];
     if (dx !== 0 && dy !== 0) {
@@ -478,7 +567,8 @@ export class Simulation {
   }
 
   private moveCreatureTo(creature: CreatureEntity, nextX: number, nextY: number): boolean {
-    if (this.state.actor.x === nextX && this.state.actor.y === nextY) {
+    const occupiedByAgent = this.state.agents.some((agent) => agent.alive && agent.x === nextX && agent.y === nextY);
+    if (occupiedByAgent) {
       return false;
     }
     if (isBlocked(this.state, nextX, nextY, this.content)) {

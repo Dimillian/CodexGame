@@ -1,8 +1,19 @@
-import type { ContentSet, CreatureEntity, Placement, SimulationState, Terrain, Tile, WorldEntity } from "./types";
+import type {
+  AgentConfig,
+  AgentState,
+  ContentSet,
+  CreatureEntity,
+  Placement,
+  SimulationState,
+  Terrain,
+  Tile,
+  WorldEntity
+} from "./types";
 
 const TERRAIN_SMOOTHING_PASSES = 1;
 const CREATURE_SPAWN_SAFE_RADIUS = 8;
 const CREATURE_SPAWN_BASE_CHANCE_SCALE = 0.5;
+const MIN_AGENT_SPAWN_DISTANCE = 3;
 
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
@@ -135,30 +146,65 @@ function smoothTerrain(tiles: Tile[][], width: number, height: number): Tile[][]
   return terrainGrid.map((row) => row.map((terrain) => ({ terrain })));
 }
 
-function defaultActorPosition(tiles: Tile[][], width: number, height: number) {
+function manhattanDistance(ax: number, ay: number, bx: number, by: number): number {
+  return Math.abs(ax - bx) + Math.abs(ay - by);
+}
+
+function spiralPositions(width: number, height: number): Array<{ x: number; y: number }> {
   const centerX = Math.floor(width / 2);
   const centerY = Math.floor(height / 2);
-  if (tiles[centerY]?.[centerX]?.terrain !== "water") {
-    return { x: centerX, y: centerY };
-  }
+  const visited = new Set<string>();
+  const out: Array<{ x: number; y: number }> = [];
 
+  const push = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= width || y >= height) {
+      return;
+    }
+    const key = `${x},${y}`;
+    if (visited.has(key)) {
+      return;
+    }
+    visited.add(key);
+    out.push({ x, y });
+  };
+
+  push(centerX, centerY);
   const maxRadius = Math.max(width, height);
-  for (let radius = 1; radius <= maxRadius; radius += 1) {
-    const minX = Math.max(0, centerX - radius);
-    const maxX = Math.min(width - 1, centerX + radius);
-    const minY = Math.max(0, centerY - radius);
-    const maxY = Math.min(height - 1, centerY + radius);
-
-    for (let y = minY; y <= maxY; y += 1) {
-      for (let x = minX; x <= maxX; x += 1) {
-        if (tiles[y]?.[x]?.terrain !== "water") {
-          return { x, y };
-        }
-      }
+  for (let r = 1; r <= maxRadius; r += 1) {
+    for (let x = centerX - r; x <= centerX + r; x += 1) {
+      push(x, centerY - r);
+      push(x, centerY + r);
+    }
+    for (let y = centerY - r + 1; y <= centerY + r - 1; y += 1) {
+      push(centerX - r, y);
+      push(centerX + r, y);
     }
   }
+  return out;
+}
 
-  return { x: centerX, y: centerY };
+function pickAgentSpawns(tiles: Tile[][], width: number, height: number, agents: AgentConfig[]): Array<{ x: number; y: number }> {
+  const candidates = spiralPositions(width, height).filter((point) => tiles[point.y]?.[point.x]?.terrain !== "water");
+  const picks: Array<{ x: number; y: number }> = [];
+
+  for (const _agent of agents) {
+    let chosen: { x: number; y: number } | null = null;
+    for (const candidate of candidates) {
+      const tooClose = picks.some((pick) => manhattanDistance(candidate.x, candidate.y, pick.x, pick.y) < MIN_AGENT_SPAWN_DISTANCE);
+      if (tooClose) {
+        continue;
+      }
+      chosen = candidate;
+      break;
+    }
+
+    if (!chosen) {
+      chosen = candidates[picks.length] ?? { x: Math.floor(width / 2), y: Math.floor(height / 2) };
+    }
+    picks.push(chosen);
+  }
+
+  return picks;
 }
 
 function clusteredScore(seed: number, x: number, y: number, salt: number): number {
@@ -176,14 +222,7 @@ function clusteredSpawnChance(baseChance: number, score: number, minMultiplier: 
   return clamp01(baseChance * multiplier);
 }
 
-function manhattanDistance(ax: number, ay: number, bx: number, by: number): number {
-  return Math.abs(ax - bx) + Math.abs(ay - by);
-}
-
-function creatureProfile(subtype: string): Omit<
-  CreatureEntity,
-  "id" | "type" | "subtype" | "x" | "y" | "quantity"
-> {
+function creatureProfile(subtype: string): Omit<CreatureEntity, "id" | "type" | "subtype" | "x" | "y" | "quantity"> {
   switch (subtype) {
     case "wolf":
       return {
@@ -233,8 +272,7 @@ function spawnEntities(
   height: number,
   seed: number,
   content: ContentSet,
-  actorX: number,
-  actorY: number
+  agents: AgentState[]
 ): WorldEntity[] {
   const entities: WorldEntity[] = [];
   let sequence = 0;
@@ -272,7 +310,10 @@ function spawnEntities(
         if (spawnRule.biome !== tile.terrain) {
           continue;
         }
-        if (manhattanDistance(x, y, actorX, actorY) <= CREATURE_SPAWN_SAFE_RADIUS) {
+        const tooCloseToAgent = agents.some(
+          (agent) => manhattanDistance(x, y, agent.x, agent.y) <= CREATURE_SPAWN_SAFE_RADIUS
+        );
+        if (tooCloseToAgent) {
           continue;
         }
         const spawnSalt = hashString(spawnRule.id, 257);
@@ -300,11 +341,34 @@ function spawnEntities(
   return entities;
 }
 
+function buildAgentState(config: AgentConfig, x: number, y: number): AgentState {
+  return {
+    id: config.id,
+    name: config.name,
+    x,
+    y,
+    facing: "S",
+    stamina: 100,
+    hp: 40,
+    maxHp: 40,
+    attack: 5,
+    defense: 3,
+    attackRange: 1,
+    cooldownTicks: 0,
+    maxCooldownTicks: 2,
+    alive: true,
+    inventory: {},
+    relations: {},
+    inbox: []
+  };
+}
+
 export function createInitialState(
   seed: number,
   width: number,
   height: number,
-  content: ContentSet
+  content: ContentSet,
+  agentConfigs: AgentConfig[]
 ): SimulationState {
   let tiles: Tile[][] = [];
 
@@ -317,8 +381,22 @@ export function createInitialState(
   }
   tiles = smoothTerrain(tiles, width, height);
 
-  const actorPosition = defaultActorPosition(tiles, width, height);
-  const entities = spawnEntities(tiles, width, height, seed, content, actorPosition.x, actorPosition.y);
+  const spawns = pickAgentSpawns(tiles, width, height, agentConfigs);
+  const agents = agentConfigs.map((config, index) => {
+    const spawn = spawns[index] ?? { x: Math.floor(width / 2), y: Math.floor(height / 2) };
+    return buildAgentState(config, spawn.x, spawn.y);
+  });
+  const agentIds = agents.map((agent) => agent.id);
+  for (const agent of agents) {
+    for (const otherId of agentIds) {
+      if (otherId === agent.id) {
+        continue;
+      }
+      agent.relations[otherId] = "neutral";
+    }
+  }
+
+  const entities = spawnEntities(tiles, width, height, seed, content, agents);
   const placements: Placement[] = [];
 
   return {
@@ -329,31 +407,28 @@ export function createInitialState(
     tiles,
     entities,
     placements,
-    actor: {
-      id: "agent-1",
-      x: actorPosition.x,
-      y: actorPosition.y,
-      facing: "S",
-      stamina: 100,
-      hp: 40,
-      maxHp: 40,
-      attack: 5,
-      defense: 3,
-      attackRange: 1,
-      cooldownTicks: 0,
-      maxCooldownTicks: 2,
-      alive: true,
-      inventory: {}
-    }
+    agents
   };
 }
 
-export function isBlocked(state: SimulationState, x: number, y: number, content: ContentSet): boolean {
+export function isBlocked(
+  state: SimulationState,
+  x: number,
+  y: number,
+  content: ContentSet,
+  options?: { ignoreAgentId?: string }
+): boolean {
   if (x < 0 || y < 0 || x >= state.width || y >= state.height) {
     return true;
   }
   const terrain = state.tiles[y]?.[x]?.terrain;
   if (terrain === "water") {
+    return true;
+  }
+  const occupiedByAgent = state.agents.some(
+    (agent) => agent.id !== options?.ignoreAgentId && agent.x === x && agent.y === y && agent.alive
+  );
+  if (occupiedByAgent) {
     return true;
   }
   const placement = state.placements.find((item) => item.x === x && item.y === y);
