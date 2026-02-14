@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import type { FormEvent, KeyboardEvent, RefObject } from "react";
 import type { RuntimeModelOption, SessionPhase } from "@codexgame/protocol";
 
@@ -16,6 +17,22 @@ type AgentConfigDraft = {
 
 type RuntimeAgentOption = {
   id: string;
+};
+
+type FeedOwnerKind = "agent" | "god" | "system";
+type FeedEntryKind = "message" | "action" | "reasoning" | "system";
+type FeedEntry = {
+  id: string;
+  kind: FeedEntryKind;
+  label: string;
+  text: string;
+};
+type FeedGroup = {
+  id: string;
+  ownerKey: string;
+  ownerKind: FeedOwnerKind;
+  ownerLabel: string;
+  entries: FeedEntry[];
 };
 
 type Props = {
@@ -64,6 +81,80 @@ function formatReasoningText(value: string): string {
   return trimmed.replace(/^thinking(?:\.\.\.)?\s*/i, "");
 }
 
+function describeFeedOwner(item: FeedItem): { ownerKey: string; ownerKind: FeedOwnerKind; ownerLabel: string } {
+  if (item.agentId) {
+    return {
+      ownerKey: `agent:${item.agentId}`,
+      ownerKind: "agent",
+      ownerLabel: item.agentId
+    };
+  }
+  if (item.role === "god") {
+    return {
+      ownerKey: "god",
+      ownerKind: "god",
+      ownerLabel: "god"
+    };
+  }
+  return {
+    ownerKey: "system",
+    ownerKind: "system",
+    ownerLabel: "runtime"
+  };
+}
+
+function describeFeedEntry(item: FeedItem): FeedEntry {
+  if (item.role === "reasoning") {
+    return {
+      id: item.id,
+      kind: "reasoning",
+      label: "thinking",
+      text: formatReasoningText(item.text)
+    };
+  }
+  if (item.role === "agent") {
+    return {
+      id: item.id,
+      kind: "message",
+      label: "say",
+      text: item.text
+    };
+  }
+  if (item.role === "god") {
+    return {
+      id: item.id,
+      kind: "message",
+      label: "god",
+      text: item.text
+    };
+  }
+  const normalized = item.text.trim();
+  const looksLikeAction = /^(move|talk|relation|inspect|loot|attack|gather|craft|place|wait|interact)\b/i.test(normalized);
+  if (looksLikeAction) {
+    return {
+      id: item.id,
+      kind: "action",
+      label: "action",
+      text: item.text
+    };
+  }
+  const looksLikeTool = /^tool\b/i.test(normalized) || normalized.toLowerCase().includes("tool call");
+  if (looksLikeTool) {
+    return {
+      id: item.id,
+      kind: "action",
+      label: "tool",
+      text: item.text
+    };
+  }
+  return {
+    id: item.id,
+    kind: "system",
+    label: item.agentId ? "event" : "system",
+    text: item.text
+  };
+}
+
 export function GodConsoleSidebar(props: Props) {
   const {
     phase,
@@ -99,6 +190,27 @@ export function GodConsoleSidebar(props: Props) {
     onChatSend,
     worldInteractionEnabled
   } = props;
+
+  const groupedFeed = useMemo(() => {
+    const groups: FeedGroup[] = [];
+    for (const item of feed) {
+      const owner = describeFeedOwner(item);
+      const entry = describeFeedEntry(item);
+      const previous = groups[groups.length - 1];
+      if (previous && previous.ownerKey === owner.ownerKey) {
+        previous.entries.push(entry);
+        continue;
+      }
+      groups.push({
+        id: `${owner.ownerKey}-${item.id}`,
+        ownerKey: owner.ownerKey,
+        ownerKind: owner.ownerKind,
+        ownerLabel: owner.ownerLabel,
+        entries: [entry]
+      });
+    }
+    return groups;
+  }, [feed]);
 
   return (
     <aside className="console">
@@ -196,16 +308,28 @@ export function GodConsoleSidebar(props: Props) {
       <div className="console-hint muted">Models from app-server: {modelsCount}</div>
 
       <div className="feed" ref={feedRef} onScroll={onFeedScroll}>
-        {feed.map((item) => (
-          <div className={`feed-item${item.role === "reasoning" ? " feed-item--reasoning" : ""}`} key={item.id}>
-            <span className={`feed-role feed-role--${item.role}`}>
-              {item.agentId || (item.role === "reasoning" ? "thinking" : item.role)}
-            </span>
-            <span className={item.role === "reasoning" ? "feed-text--reasoning" : undefined}>
-              {item.role === "reasoning" ? formatReasoningText(item.text) : item.text}
-            </span>
-          </div>
-        ))}
+        {groupedFeed.length === 0 ? (
+          <div className="feed-empty muted">No events yet.</div>
+        ) : (
+          groupedFeed.map((group) => (
+            <div className={`feed-group feed-group--${group.ownerKind}`} key={group.id}>
+              <div className="feed-group-head">
+                <span className="feed-group-owner">{group.ownerLabel}</span>
+                <span className="feed-group-count">{group.entries.length}</span>
+              </div>
+              <div className="feed-tree">
+                {group.entries.map((entry) => (
+                  <div className={`feed-entry feed-entry--${entry.kind}`} key={entry.id}>
+                    <span className="feed-entry-label">{entry.label}</span>
+                    <span className={entry.kind === "reasoning" ? "feed-entry-text feed-entry-text--reasoning" : "feed-entry-text"}>
+                      {entry.text}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))
+        )}
       </div>
 
       <div className="console-compose">

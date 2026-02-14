@@ -68,6 +68,8 @@ type AgentConfigDraft = {
   effort: string;
 };
 
+type HudSectionKey = "selectedAgent" | "score" | "social" | "agents" | "inventory" | "crafting" | "buildables";
+
 const runtimeUrl = import.meta.env.VITE_RUNTIME_WS_URL ?? "ws://127.0.0.1:8787";
 
 function formatItemId(value: string): string {
@@ -169,6 +171,15 @@ export default function App() {
   const [runtimeEffort, setRuntimeEffort] = useState<string>("low");
   const [runtimeSchedulerMs, setRuntimeSchedulerMs] = useState<number>(0);
   const [runtimeQueueAhead, setRuntimeQueueAhead] = useState<number>(0);
+  const [collapsedHudSections, setCollapsedHudSections] = useState<Record<HudSectionKey, boolean>>({
+    selectedAgent: false,
+    score: false,
+    social: false,
+    agents: false,
+    inventory: false,
+    crafting: false,
+    buildables: false
+  });
 
   const [agentConfigs, setAgentConfigs] = useState<AgentConfigDraft[]>([defaultAgentConfig(0)]);
 
@@ -600,6 +611,13 @@ export default function App() {
     setAgentConfigs((current) => (current.length <= 1 ? current : current.filter((_, idx) => idx !== index)));
   }
 
+  function toggleHudSection(section: HudSectionKey): void {
+    setCollapsedHudSections((current) => ({
+      ...current,
+      [section]: !current[section]
+    }));
+  }
+
   const primarySessionLabel = phase === "running" ? (paused ? "Resume" : "Pause") : phase === "starting" ? "Starting..." : "Start";
   const primarySessionDisabled = !connected || phase === "starting";
   const worldSeedLabel = preparedSeed ? `Next World Seed: ${preparedSeed}` : "Next World Seed: random";
@@ -622,110 +640,184 @@ export default function App() {
           <div className="game-surface" ref={phaserContainerRef} />
           <div className="game-hud">
             <div className="hud-card">
-              <h3>Selected Agent</h3>
-              <div className="hud-grid">
-                <p>Tick</p>
-                <p>{tick}</p>
-                <p>Agent</p>
-                <p>{selectedAgent?.id ?? "-"}</p>
-                <p>Pos</p>
-                <p>
-                  {selectedAgent ? `${selectedAgent.x},${selectedAgent.y}` : "-"}
-                </p>
-                <p>Status</p>
-                <p>{selectedAgent?.alive ? "alive" : "down"}</p>
-                <p>HP</p>
-                <p>
-                  {selectedAgent?.hp ?? 0}/{selectedAgent?.maxHp ?? 0}
-                </p>
-                <p>Stamina</p>
-                <p>{selectedAgent?.stamina ?? 0}</p>
-              </div>
-            </div>
-
-            <div className="hud-card">
-              <h3>Score</h3>
-              <div className="hud-grid">
-                <p>Total</p>
-                <p className="ok">{selectedAgent?.score.total ?? 0}</p>
-                <p>Survival</p>
-                <p>{selectedAgent?.score.survival ?? 0}</p>
-                <p>Progress</p>
-                <p>{selectedAgent?.score.progression ?? 0}</p>
-                <p>Social</p>
-                <p>{selectedAgent?.score.social ?? 0}</p>
-              </div>
-              <p className="muted">Track: craft {selectedAgent?.scoreTrack.crafts ?? 0} | place {selectedAgent?.scoreTrack.structuresPlaced ?? 0}</p>
-              <p className="muted">
-                Track: coop-talk {selectedAgent?.scoreTrack.cooperativeTalks ?? 0} | inspect {selectedAgent?.scoreTrack.tacticalInspects ?? 0} | idle{" "}
-                {selectedAgent?.scoreTrack.idleStreak ?? 0}
-              </p>
-            </div>
-
-            <div className="hud-card">
-              <h3>Social</h3>
-              <p>Allies: {selectedRelations.allies.length ? selectedRelations.allies.join(", ") : "-"}</p>
-              <p>Enemies: {selectedRelations.enemies.length ? selectedRelations.enemies.join(", ") : "-"}</p>
-              <p>Known inventories: {knownPeerInventoryRows.length || 0}</p>
-              {knownPeerInventoryRows.map((row) => (
-                <p key={row.agentId} className="muted">
-                  {row.agentId}: {row.itemCount} item(s) @ tick {row.tick}
-                </p>
-              ))}
-              <p className="muted">Recent inbox:</p>
-              {recentInboxRows.length === 0 ? (
-                <p className="muted">None</p>
-              ) : (
-                recentInboxRows.map((row, index) => (
-                  <p key={`${row.fromAgentId}-${row.tick}-${index}`} className="muted">
-                    t{row.tick} {row.fromAgentId}: {row.message}
+              <button
+                type="button"
+                className="hud-card-toggle"
+                onClick={() => toggleHudSection("selectedAgent")}
+                aria-expanded={!collapsedHudSections.selectedAgent}
+              >
+                <span>Selected Agent</span>
+                <span className="hud-card-toggle-icon">{collapsedHudSections.selectedAgent ? "+" : "-"}</span>
+              </button>
+              {!collapsedHudSections.selectedAgent ? (
+                <div className="hud-grid">
+                  <p>Tick</p>
+                  <p>{tick}</p>
+                  <p>Agent</p>
+                  <p>{selectedAgent?.id ?? "-"}</p>
+                  <p>Pos</p>
+                  <p>
+                    {selectedAgent ? `${selectedAgent.x},${selectedAgent.y}` : "-"}
                   </p>
-                ))
-              )}
-            </div>
-
-            <div className="hud-card">
-              <h3>Agents</h3>
-              {runtimeAgents.map((agent) => (
-                <p key={agent.id} className={agent.id === selectedAgent?.id ? "ok" : undefined}>
-                  {agent.id} HP {agent.hp}/{agent.maxHp} | score {agent.score.total}
-                </p>
-              ))}
-            </div>
-
-            <div className="hud-card">
-              <h3>Inventory</h3>
-              {inventoryEntries.length === 0 ? (
-                <p className="muted">Empty</p>
-              ) : (
-                inventoryEntries.map((entry) => (
-                  <p key={entry.item}>
-                    {entry.label}: {entry.count}
+                  <p>Status</p>
+                  <p>{selectedAgent?.alive ? "alive" : "down"}</p>
+                  <p>HP</p>
+                  <p>
+                    {selectedAgent?.hp ?? 0}/{selectedAgent?.maxHp ?? 0}
                   </p>
-                ))
-              )}
+                  <p>Stamina</p>
+                  <p>{selectedAgent?.stamina ?? 0}</p>
+                </div>
+              ) : null}
             </div>
 
             <div className="hud-card">
-              <h3>Crafting</h3>
-              {recipeRows.length === 0 ? (
-                <p className="muted">No recipes</p>
-              ) : (
-                recipeRows.map((row) => (
-                  <p key={row.id} className={row.craftable ? "ok" : "muted"}>
-                    {row.output} [{row.craftable ? "ready" : row.input}]
+              <button
+                type="button"
+                className="hud-card-toggle"
+                onClick={() => toggleHudSection("score")}
+                aria-expanded={!collapsedHudSections.score}
+              >
+                <span>Score</span>
+                <span className="hud-card-toggle-icon">{collapsedHudSections.score ? "+" : "-"}</span>
+              </button>
+              {!collapsedHudSections.score ? (
+                <>
+                  <div className="hud-grid">
+                    <p>Total</p>
+                    <p className="ok">{selectedAgent?.score.total ?? 0}</p>
+                    <p>Survival</p>
+                    <p>{selectedAgent?.score.survival ?? 0}</p>
+                    <p>Progress</p>
+                    <p>{selectedAgent?.score.progression ?? 0}</p>
+                    <p>Social</p>
+                    <p>{selectedAgent?.score.social ?? 0}</p>
+                  </div>
+                  <p className="muted">Track: craft {selectedAgent?.scoreTrack.crafts ?? 0} | place {selectedAgent?.scoreTrack.structuresPlaced ?? 0}</p>
+                  <p className="muted">
+                    Track: coop-talk {selectedAgent?.scoreTrack.cooperativeTalks ?? 0} | inspect {selectedAgent?.scoreTrack.tacticalInspects ?? 0} | idle{" "}
+                    {selectedAgent?.scoreTrack.idleStreak ?? 0}
                   </p>
-                ))
-              )}
+                </>
+              ) : null}
             </div>
 
             <div className="hud-card">
-              <h3>Buildables</h3>
-              {buildableRows.map((row) => (
-                <p key={row.id}>
-                  {row.label}: {row.owned}
-                </p>
-              ))}
+              <button
+                type="button"
+                className="hud-card-toggle"
+                onClick={() => toggleHudSection("social")}
+                aria-expanded={!collapsedHudSections.social}
+              >
+                <span>Social</span>
+                <span className="hud-card-toggle-icon">{collapsedHudSections.social ? "+" : "-"}</span>
+              </button>
+              {!collapsedHudSections.social ? (
+                <>
+                  <p>Allies: {selectedRelations.allies.length ? selectedRelations.allies.join(", ") : "-"}</p>
+                  <p>Enemies: {selectedRelations.enemies.length ? selectedRelations.enemies.join(", ") : "-"}</p>
+                  <p>Known inventories: {knownPeerInventoryRows.length || 0}</p>
+                  {knownPeerInventoryRows.map((row) => (
+                    <p key={row.agentId} className="muted">
+                      {row.agentId}: {row.itemCount} item(s) @ tick {row.tick}
+                    </p>
+                  ))}
+                  <p className="muted">Recent inbox:</p>
+                  {recentInboxRows.length === 0 ? (
+                    <p className="muted">None</p>
+                  ) : (
+                    recentInboxRows.map((row, index) => (
+                      <p key={`${row.fromAgentId}-${row.tick}-${index}`} className="muted">
+                        t{row.tick} {row.fromAgentId}: {row.message}
+                      </p>
+                    ))
+                  )}
+                </>
+              ) : null}
+            </div>
+
+            <div className="hud-card">
+              <button
+                type="button"
+                className="hud-card-toggle"
+                onClick={() => toggleHudSection("agents")}
+                aria-expanded={!collapsedHudSections.agents}
+              >
+                <span>Agents</span>
+                <span className="hud-card-toggle-icon">{collapsedHudSections.agents ? "+" : "-"}</span>
+              </button>
+              {!collapsedHudSections.agents
+                ? runtimeAgents.map((agent) => (
+                    <p key={agent.id} className={agent.id === selectedAgent?.id ? "ok" : undefined}>
+                      {agent.id} HP {agent.hp}/{agent.maxHp} | score {agent.score.total}
+                    </p>
+                  ))
+                : null}
+            </div>
+
+            <div className="hud-card">
+              <button
+                type="button"
+                className="hud-card-toggle"
+                onClick={() => toggleHudSection("inventory")}
+                aria-expanded={!collapsedHudSections.inventory}
+              >
+                <span>Inventory</span>
+                <span className="hud-card-toggle-icon">{collapsedHudSections.inventory ? "+" : "-"}</span>
+              </button>
+              {!collapsedHudSections.inventory ? (
+                inventoryEntries.length === 0 ? (
+                  <p className="muted">Empty</p>
+                ) : (
+                  inventoryEntries.map((entry) => (
+                    <p key={entry.item}>
+                      {entry.label}: {entry.count}
+                    </p>
+                  ))
+                )
+              ) : null}
+            </div>
+
+            <div className="hud-card">
+              <button
+                type="button"
+                className="hud-card-toggle"
+                onClick={() => toggleHudSection("crafting")}
+                aria-expanded={!collapsedHudSections.crafting}
+              >
+                <span>Crafting</span>
+                <span className="hud-card-toggle-icon">{collapsedHudSections.crafting ? "+" : "-"}</span>
+              </button>
+              {!collapsedHudSections.crafting ? (
+                recipeRows.length === 0 ? (
+                  <p className="muted">No recipes</p>
+                ) : (
+                  recipeRows.map((row) => (
+                    <p key={row.id} className={row.craftable ? "ok" : "muted"}>
+                      {row.output} [{row.craftable ? "ready" : row.input}]
+                    </p>
+                  ))
+                )
+              ) : null}
+            </div>
+
+            <div className="hud-card">
+              <button
+                type="button"
+                className="hud-card-toggle"
+                onClick={() => toggleHudSection("buildables")}
+                aria-expanded={!collapsedHudSections.buildables}
+              >
+                <span>Buildables</span>
+                <span className="hud-card-toggle-icon">{collapsedHudSections.buildables ? "+" : "-"}</span>
+              </button>
+              {!collapsedHudSections.buildables
+                ? buildableRows.map((row) => (
+                    <p key={row.id}>
+                      {row.label}: {row.owned}
+                    </p>
+                  ))
+                : null}
             </div>
           </div>
         </div>
