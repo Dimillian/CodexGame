@@ -155,7 +155,6 @@ export default function App() {
     prefabs: [],
     recipes: []
   });
-  const [worldEntities, setWorldEntities] = useState<Array<{ id: string; type: "resource" | "creature"; subtype: string; quantity: number }>>([]);
   const [runtimeAgents, setRuntimeAgents] = useState<RuntimeAgent[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string>("agent-1");
 
@@ -266,7 +265,6 @@ export default function App() {
           if (message.payload.phase === "idle") {
             setTick(0);
             setRuntimeAgents([]);
-            setWorldEntities([]);
             setCatalog({ prefabs: [], recipes: [] });
             sceneRef.current?.clearSnapshot();
           }
@@ -290,14 +288,6 @@ export default function App() {
 
           setTick(message.payload.tick);
           setRuntimeAgents(message.payload.agents);
-          setWorldEntities(
-            message.payload.world.entities.map((entity) => ({
-              id: entity.id,
-              type: entity.type,
-              subtype: entity.subtype,
-              quantity: entity.quantity
-            }))
-          );
           setCatalog(message.payload.catalog);
 
           if (!message.payload.agents.some((agent) => agent.id === currentSelectedAgentId)) {
@@ -391,25 +381,6 @@ export default function App() {
       }))
       .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
   }, [selectedAgent, itemNameById]);
-
-  const nearbyResources = useMemo(() => {
-    if (!selectedAgent) {
-      return [] as Array<{ id: string; subtype: string; quantity: number; distance: number }>;
-    }
-    const quantityById = new Map(worldEntities.map((entity) => [entity.id, entity.quantity] as const));
-    const typeById = new Map(worldEntities.map((entity) => [entity.id, entity.subtype] as const));
-
-    return selectedAgent.nearbyEntities
-      .filter((entity) => entity.type.startsWith("resource:"))
-      .map((entity) => ({
-        id: entity.id,
-        subtype: typeById.get(entity.id) ?? entity.type.replace("resource:", ""),
-        quantity: quantityById.get(entity.id) ?? 0,
-        distance: entity.distance
-      }))
-      .sort((a, b) => a.distance - b.distance)
-      .slice(0, 8);
-  }, [selectedAgent, worldEntities]);
 
   const recipeRows = useMemo(() => {
     if (!selectedAgent) {
@@ -511,7 +482,6 @@ export default function App() {
     setLatencyMs(0);
     setTick(0);
     setRuntimeAgents([]);
-    setWorldEntities([]);
     setCatalog({ prefabs: [], recipes: [] });
     setPhase("idle");
     setPaused(false);
@@ -731,19 +701,6 @@ export default function App() {
                 inventoryEntries.map((entry) => (
                   <p key={entry.item}>
                     {entry.label}: {entry.count}
-                  </p>
-                ))
-              )}
-            </div>
-
-            <div className="hud-card">
-              <h3>Nearby Resources</h3>
-              {nearbyResources.length === 0 ? (
-                <p className="muted">None in range</p>
-              ) : (
-                nearbyResources.map((resource) => (
-                  <p key={resource.id}>
-                    {formatItemId(resource.subtype)} (q{resource.quantity}) d{resource.distance}
                   </p>
                 ))
               )}
