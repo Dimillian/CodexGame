@@ -80,6 +80,45 @@ describe("combat_ai", () => {
     expect(second.reason).toBe("attack_cooldown");
   });
 
+  it("allows pvp attacks only against enemies", () => {
+    const simulation = new Simulation(33, 8, 8, content, [
+      { id: "agent-1", name: "Agent 1" },
+      { id: "agent-2", name: "Agent 2" }
+    ]);
+    flattenToPlains(simulation);
+    const state = simulation.getState();
+    const a1 = state.agents.find((agent) => agent.id === "agent-1")!;
+    const a2 = state.agents.find((agent) => agent.id === "agent-2")!;
+    a1.x = 3;
+    a1.y = 3;
+    a1.attack = 6;
+    a1.attackRange = 1;
+    a1.cooldownTicks = 0;
+    a1.maxCooldownTicks = 2;
+    a2.x = 4;
+    a2.y = 3;
+    a2.defense = 2;
+    a2.hp = 10;
+    a2.maxHp = 10;
+    a2.alive = true;
+
+    const rejected = simulation.applyAction("agent-1", { type: "attack", targetId: "agent-2" });
+    expect(rejected.result).toBe("rejected");
+    expect(rejected.reason).toBe("target_not_enemy");
+
+    const relationResult = simulation.applyAction("agent-1", {
+      type: "set_relation",
+      targetAgentId: "agent-2",
+      relation: "enemy"
+    });
+    expect(relationResult.result).toBe("applied");
+
+    const applied = simulation.applyAction("agent-1", { type: "attack", targetId: "agent-2" });
+    expect(applied.result).toBe("applied");
+    expect(a2.hp).toBe(6);
+    expect(a2.alive).toBe(true);
+  });
+
   it("chases and attacks nearest alive agent on deterministic ticks", () => {
     const simulation = new Simulation(22, 8, 8, content, [
       { id: "agent-1", name: "Agent 1" },

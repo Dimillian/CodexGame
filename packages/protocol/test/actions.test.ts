@@ -9,7 +9,7 @@ describe("agentTurnOutputSchema", () => {
         { type: "move", direction: "NE", steps: 2 },
         { type: "attack", targetId: "npc-1" },
         { type: "wait", ticks: 2 },
-        { type: "talk", toAgentId: "agent-2", message: "Truce?" }
+        { type: "inspect_agent", targetAgentId: "agent-2" }
       ]
     });
     expect(parsed.actions).toHaveLength(4);

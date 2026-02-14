@@ -54,6 +54,16 @@ export const setRelationActionSchema = z.object({
   relation: relationSchema
 });
 
+export const inspectAgentActionSchema = z.object({
+  type: z.literal("inspect_agent"),
+  targetAgentId: z.string().min(1)
+});
+
+export const lootAgentActionSchema = z.object({
+  type: z.literal("loot_agent"),
+  targetAgentId: z.string().min(1)
+});
+
 export const agentActionSchema = z.discriminatedUnion("type", [
   moveActionSchema,
   interactActionSchema,
@@ -63,7 +73,9 @@ export const agentActionSchema = z.discriminatedUnion("type", [
   placeActionSchema,
   waitActionSchema,
   talkActionSchema,
-  setRelationActionSchema
+  setRelationActionSchema,
+  inspectAgentActionSchema,
+  lootAgentActionSchema
 ]);
 
 export const agentTurnOutputSchema = z.object({
@@ -104,7 +116,9 @@ export const agentTurnOutputJsonSchema = {
           "relation"
         ],
         properties: {
-          type: { enum: ["move", "interact", "gather", "attack", "craft", "place", "wait", "talk", "set_relation"] },
+          type: {
+            enum: ["move", "interact", "gather", "attack", "craft", "place", "wait", "talk", "set_relation", "inspect_agent", "loot_agent"]
+          },
           direction: { enum: ["N", "NE", "E", "SE", "S", "SW", "W", "NW", null] },
           steps: { enum: [1, 2, 3, null] },
           targetId: { type: ["string", "null"] },

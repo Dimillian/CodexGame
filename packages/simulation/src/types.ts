@@ -60,6 +60,13 @@ export type AgentState = {
   maxCooldownTicks: number;
   alive: boolean;
   inventory: Record<string, number>;
+  knownAgentInventories: Record<
+    string,
+    {
+      inventory: Record<string, number>;
+      tick: number;
+    }
+  >;
   relations: Record<string, "ally" | "enemy" | "neutral">;
   inbox: Array<{ fromAgentId: string; message: string; tick: number }>;
 };
@@ -130,6 +137,13 @@ export type WorldSnapshot = {
     cooldownTicks: number;
     alive: boolean;
     inventory: Record<string, number>;
+    knownPeerInventories: Record<
+      string,
+      {
+        inventory: Record<string, number>;
+        tick: number;
+      }
+    >;
     nearbyEntities: NearbyEntity[];
     relations: {
       allies: string[];

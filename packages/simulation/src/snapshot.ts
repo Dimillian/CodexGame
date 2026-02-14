@@ -56,6 +56,15 @@ export function buildSnapshot(state: SimulationState): WorldSnapshot {
         cooldownTicks: agent.cooldownTicks,
         alive: agent.alive,
         inventory: { ...agent.inventory },
+        knownPeerInventories: Object.fromEntries(
+          Object.entries(agent.knownAgentInventories).map(([id, snapshot]) => [
+            id,
+            {
+              inventory: { ...snapshot.inventory },
+              tick: snapshot.tick
+            }
+          ])
+        ),
         nearbyEntities,
         relations: {
           allies: Object.entries(agent.relations)
@@ -89,6 +98,8 @@ export function buildPromptContext(snapshot: WorldSnapshot, agentId: string): st
       hp: agent.hp,
       maxHp: agent.maxHp,
       alive: agent.alive,
+      knownInventory: self?.knownPeerInventories[agent.id]?.inventory ?? null,
+      knownInventoryTick: self?.knownPeerInventories[agent.id]?.tick ?? null,
       relation: self?.relations.allies.includes(agent.id)
         ? "ally"
         : self?.relations.enemies.includes(agent.id)

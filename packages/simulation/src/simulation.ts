@@ -123,6 +123,15 @@ function ensureAgentDefaults(agent: AgentState): AgentState {
       : 0,
     alive: typeof agent.alive === "boolean" ? agent.alive : hp > 0,
     inventory: { ...agent.inventory },
+    knownAgentInventories: Object.fromEntries(
+      Object.entries(agent.knownAgentInventories ?? {}).map(([id, snapshot]) => [
+        id,
+        {
+          inventory: { ...(snapshot?.inventory ?? {}) },
+          tick: Number.isFinite(snapshot?.tick) ? Math.max(0, Math.floor(snapshot.tick)) : 0
+        }
+      ])
+    ),
     relations: { ...(agent.relations ?? {}) },
     inbox: Array.isArray(agent.inbox) ? [...agent.inbox] : []
   };
@@ -207,6 +216,15 @@ function cloneState(state: SimulationState): SimulationState {
     agents: state.agents.map((agent) => ({
       ...agent,
       inventory: { ...agent.inventory },
+      knownAgentInventories: Object.fromEntries(
+        Object.entries(agent.knownAgentInventories ?? {}).map(([id, snapshot]) => [
+          id,
+          {
+            inventory: { ...snapshot.inventory },
+            tick: snapshot.tick
+          }
+        ])
+      ),
       relations: { ...agent.relations },
       inbox: [...agent.inbox]
     }))
@@ -322,27 +340,50 @@ export class Simulation {
         return { agentId, action, result: "applied" };
       }
       case "attack": {
-        const target = this.state.entities.find(
-          (item): item is CreatureEntity => item.id === action.targetId && item.type === "creature"
-        );
-        if (!target) {
-          return { agentId, action, result: "rejected", reason: "target_not_attackable" };
-        }
         if (agent.cooldownTicks > 0) {
           return { agentId, action, result: "rejected", reason: "attack_cooldown" };
         }
-        const distance = manhattanDistance(agent.x, agent.y, target.x, target.y);
+        const targetCreature = this.state.entities.find(
+          (item): item is CreatureEntity => item.id === action.targetId && item.type === "creature"
+        );
+        if (targetCreature) {
+          const distance = manhattanDistance(agent.x, agent.y, targetCreature.x, targetCreature.y);
+          if (distance > agent.attackRange) {
+            return { agentId, action, result: "rejected", reason: "target_not_in_range" };
+          }
+          const damage = computeDamage(agent.attack, targetCreature.defense);
+          targetCreature.hp = Math.max(0, targetCreature.hp - damage);
+          targetCreature.behaviorState = "attack";
+          agent.cooldownTicks = agent.maxCooldownTicks;
+          agent.stamina = Math.max(0, agent.stamina - ATTACK_STAMINA_COST);
+          if (targetCreature.hp <= 0) {
+            this.state.entities = this.state.entities.filter((item) => item.id !== targetCreature.id);
+          }
+          return { agentId, action, result: "applied" };
+        }
+
+        const targetAgent = this.state.agents.find((item) => item.id === action.targetId);
+        if (!targetAgent) {
+          return { agentId, action, result: "rejected", reason: "target_not_attackable" };
+        }
+        if (targetAgent.id === agentId) {
+          return { agentId, action, result: "rejected", reason: "cannot_attack_self" };
+        }
+        if (!targetAgent.alive) {
+          return { agentId, action, result: "rejected", reason: "target_not_alive" };
+        }
+        if (agent.relations[targetAgent.id] !== "enemy") {
+          return { agentId, action, result: "rejected", reason: "target_not_enemy" };
+        }
+        const distance = manhattanDistance(agent.x, agent.y, targetAgent.x, targetAgent.y);
         if (distance > agent.attackRange) {
           return { agentId, action, result: "rejected", reason: "target_not_in_range" };
         }
-        const damage = computeDamage(agent.attack, target.defense);
-        target.hp = Math.max(0, target.hp - damage);
-        target.behaviorState = "attack";
+        const damage = computeDamage(agent.attack, targetAgent.defense);
+        targetAgent.hp = Math.max(0, targetAgent.hp - damage);
+        targetAgent.alive = targetAgent.hp > 0;
         agent.cooldownTicks = agent.maxCooldownTicks;
         agent.stamina = Math.max(0, agent.stamina - ATTACK_STAMINA_COST);
-        if (target.hp <= 0) {
-          this.state.entities = this.state.entities.filter((item) => item.id !== target.id);
-        }
         return { agentId, action, result: "applied" };
       }
       case "craft": {
@@ -416,6 +457,46 @@ export class Simulation {
           return { agentId, action, result: "rejected", reason: "cannot_set_self_relation" };
         }
         agent.relations[target.id] = action.relation;
+        return { agentId, action, result: "applied" };
+      }
+      case "inspect_agent": {
+        const target = this.state.agents.find((item) => item.id === action.targetAgentId);
+        if (!target) {
+          return { agentId, action, result: "rejected", reason: "target_agent_not_found" };
+        }
+        if (target.id === agentId) {
+          return { agentId, action, result: "rejected", reason: "cannot_inspect_self" };
+        }
+        const distance = manhattanDistance(agent.x, agent.y, target.x, target.y);
+        if (distance > 2) {
+          return { agentId, action, result: "rejected", reason: "target_too_far" };
+        }
+        agent.knownAgentInventories[target.id] = {
+          inventory: { ...target.inventory },
+          tick: this.state.tick
+        };
+        return { agentId, action, result: "applied" };
+      }
+      case "loot_agent": {
+        const target = this.state.agents.find((item) => item.id === action.targetAgentId);
+        if (!target) {
+          return { agentId, action, result: "rejected", reason: "target_agent_not_found" };
+        }
+        if (target.id === agentId) {
+          return { agentId, action, result: "rejected", reason: "cannot_loot_self" };
+        }
+        if (target.alive) {
+          return { agentId, action, result: "rejected", reason: "target_not_dead" };
+        }
+        if (!adjacent(agent.x, agent.y, target.x, target.y)) {
+          return { agentId, action, result: "rejected", reason: "target_not_reachable" };
+        }
+        for (const [item, count] of Object.entries(target.inventory)) {
+          if (count > 0) {
+            addInventory(agent.inventory, item, count);
+          }
+        }
+        target.inventory = {};
         return { agentId, action, result: "applied" };
       }
       default:

@@ -25,6 +25,7 @@ export function buildGameplayPrompt(
     "Output valid JSON only matching the provided schema. Never include markdown.",
     "You can gather resources, craft tools/weapons/structures from recipes, then place structures from inventory.",
     "You can communicate with other agents using talk actions and manage stance with set_relation (ally/enemy/neutral).",
+    "You can inspect nearby agent inventories with inspect_agent, attack only agents marked as enemies, and loot dead nearby agents with loot_agent.",
     "Hostile creatures exist. Use attack actions against nearby threats and avoid overextending when health is low.",
     "Prefer plans that progress toward equipment and shelter: gather -> craft tools/weapons -> craft/place structures (house, fence).",
     "Prefer safe, local, low-risk actions. Max 4 actions.",

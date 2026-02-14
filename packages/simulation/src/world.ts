@@ -358,6 +358,7 @@ function buildAgentState(config: AgentConfig, x: number, y: number): AgentState 
     maxCooldownTicks: 2,
     alive: true,
     inventory: {},
+    knownAgentInventories: {},
     relations: {},
     inbox: []
   };

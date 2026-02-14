@@ -66,4 +66,55 @@ describe("social_actions", () => {
     expect(a2?.inbox[a2.inbox.length - 1]?.fromAgentId).toBe("agent-1");
     expect(a2?.inbox[a2.inbox.length - 1]?.message).toBe("Let's cooperate");
   });
+
+  it("inspects nearby agent inventory", () => {
+    const simulation = new Simulation(104, 20, 20, content, [
+      { id: "agent-1", name: "A" },
+      { id: "agent-2", name: "B" }
+    ]);
+    const state = simulation.getState();
+    const a1 = state.agents.find((agent) => agent.id === "agent-1")!;
+    const a2 = state.agents.find((agent) => agent.id === "agent-2")!;
+    a1.x = 5;
+    a1.y = 5;
+    a2.x = 6;
+    a2.y = 5;
+    a2.inventory = { wood: 3, stone: 1 };
+    state.tick = 42;
+
+    const result = simulation.applyAction("agent-1", {
+      type: "inspect_agent",
+      targetAgentId: "agent-2"
+    });
+    expect(result.result).toBe("applied");
+    expect(a1.knownAgentInventories["agent-2"]).toEqual({
+      inventory: { wood: 3, stone: 1 },
+      tick: 42
+    });
+  });
+
+  it("loots dead nearby agent inventory", () => {
+    const simulation = new Simulation(105, 20, 20, content, [
+      { id: "agent-1", name: "A" },
+      { id: "agent-2", name: "B" }
+    ]);
+    const state = simulation.getState();
+    const a1 = state.agents.find((agent) => agent.id === "agent-1")!;
+    const a2 = state.agents.find((agent) => agent.id === "agent-2")!;
+    a1.x = 8;
+    a1.y = 8;
+    a2.x = 9;
+    a2.y = 8;
+    a2.alive = false;
+    a2.hp = 0;
+    a2.inventory = { fiber: 4, wood: 2 };
+
+    const result = simulation.applyAction("agent-1", {
+      type: "loot_agent",
+      targetAgentId: "agent-2"
+    });
+    expect(result.result).toBe("applied");
+    expect(a1.inventory).toEqual({ fiber: 4, wood: 2 });
+    expect(a2.inventory).toEqual({});
+  });
 });
