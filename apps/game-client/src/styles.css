@@ -78,6 +78,16 @@ body,
   margin-top: 2px;
 }
 
+.hud-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+}
+
+.hud-grid p:nth-child(odd) {
+  color: rgba(243, 234, 223, 0.7);
+}
+
 .ok {
   color: #9edb9d;
 }

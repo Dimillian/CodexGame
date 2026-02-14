@@ -81,9 +81,10 @@ function recomputeAgentScores(state: SimulationState): void {
     const survivalHp = hpRatio * 35;
     const survival = clamp(survivalBase + survivalHp, 0, 60);
 
-    const inventoryProgress = clamp(inventoryCount(agent.inventory), 0, 20);
+    const inventoryProgress = clamp(inventoryCount(agent.inventory), 0, 18);
     const craftedProgress = clamp(agent.scoreTrack.crafts * 1.5 + agent.scoreTrack.structuresPlaced * 2.5, 0, 10);
-    const progression = clamp(inventoryProgress + craftedProgress, 0, 30);
+    const idlePenalty = clamp(agent.scoreTrack.idleStreak * 1.25, 0, 10);
+    const progression = clamp(inventoryProgress + craftedProgress - idlePenalty, 0, 30);
 
     const allyNear = state.agents.filter(
       (other) => other.id !== agent.id && other.alive && agent.relations[other.id] === "ally" && manhattanDistance(agent.x, agent.y, other.x, other.y) <= 2
@@ -91,7 +92,11 @@ function recomputeAgentScores(state: SimulationState): void {
     const enemyNear = state.agents.filter(
       (other) => other.id !== agent.id && other.alive && agent.relations[other.id] === "enemy" && manhattanDistance(agent.x, agent.y, other.x, other.y) <= 2
     ).length;
-    const socialEvents = agent.scoreTrack.enemyAgentKills * 4 + agent.scoreTrack.successfulLoots * 2;
+    const socialEvents =
+      agent.scoreTrack.enemyAgentKills * 4 +
+      agent.scoreTrack.successfulLoots * 2 +
+      agent.scoreTrack.cooperativeTalks * 0.75 +
+      agent.scoreTrack.tacticalInspects * 0.75;
     const socialPositioning = allyNear * 1 - enemyNear * 0.5;
     const social = clamp(socialEvents + socialPositioning, 0, 10);
 
@@ -180,7 +185,10 @@ function ensureAgentDefaults(agent: AgentState): AgentState {
       enemyAgentKills: Number.isFinite(agent.scoreTrack?.enemyAgentKills) ? Math.max(0, Math.floor(agent.scoreTrack.enemyAgentKills)) : 0,
       successfulLoots: Number.isFinite(agent.scoreTrack?.successfulLoots) ? Math.max(0, Math.floor(agent.scoreTrack.successfulLoots)) : 0,
       crafts: Number.isFinite(agent.scoreTrack?.crafts) ? Math.max(0, Math.floor(agent.scoreTrack.crafts)) : 0,
-      structuresPlaced: Number.isFinite(agent.scoreTrack?.structuresPlaced) ? Math.max(0, Math.floor(agent.scoreTrack.structuresPlaced)) : 0
+      structuresPlaced: Number.isFinite(agent.scoreTrack?.structuresPlaced) ? Math.max(0, Math.floor(agent.scoreTrack.structuresPlaced)) : 0,
+      cooperativeTalks: Number.isFinite(agent.scoreTrack?.cooperativeTalks) ? Math.max(0, Math.floor(agent.scoreTrack.cooperativeTalks)) : 0,
+      tacticalInspects: Number.isFinite(agent.scoreTrack?.tacticalInspects) ? Math.max(0, Math.floor(agent.scoreTrack.tacticalInspects)) : 0,
+      idleStreak: Number.isFinite(agent.scoreTrack?.idleStreak) ? Math.max(0, Math.floor(agent.scoreTrack.idleStreak)) : 0
     },
     knownAgentInventories: Object.fromEntries(
       Object.entries(agent.knownAgentInventories ?? {}).map(([id, snapshot]) => [
@@ -369,6 +377,8 @@ export class Simulation {
           agent.y = nextY;
         }
         agent.stamina = Math.max(0, agent.stamina - action.steps * 2);
+        agent.scoreTrack.idleStreak = 0;
+        recomputeAgentScores(this.state);
         return { agentId, action, result: "applied" };
       }
       case "interact": {
@@ -382,6 +392,8 @@ export class Simulation {
         if (!adjacent(agent.x, agent.y, entity.x, entity.y)) {
           return { agentId, action, result: "rejected", reason: "target_not_reachable" };
         }
+        agent.scoreTrack.idleStreak += 1;
+        recomputeAgentScores(this.state);
         return { agentId, action, result: "applied" };
       }
       case "gather": {
@@ -400,6 +412,7 @@ export class Simulation {
         if (entity.quantity <= 0) {
           this.state.entities = this.state.entities.filter((item) => item.id !== entity.id);
         }
+        agent.scoreTrack.idleStreak = 0;
         recomputeAgentScores(this.state);
         return { agentId, action, result: "applied" };
       }
@@ -424,6 +437,7 @@ export class Simulation {
             this.state.entities = this.state.entities.filter((item) => item.id !== targetCreature.id);
             agent.scoreTrack.creatureKills += 1;
           }
+          agent.scoreTrack.idleStreak = 0;
           recomputeAgentScores(this.state);
           return { agentId, action, result: "applied" };
         }
@@ -453,6 +467,7 @@ export class Simulation {
         }
         agent.cooldownTicks = agent.maxCooldownTicks;
         agent.stamina = Math.max(0, agent.stamina - ATTACK_STAMINA_COST);
+        agent.scoreTrack.idleStreak = 0;
         recomputeAgentScores(this.state);
         return { agentId, action, result: "applied" };
       }
@@ -470,6 +485,7 @@ export class Simulation {
         }
         addInventory(agent.inventory, recipe.output.item, recipe.output.count);
         agent.scoreTrack.crafts += 1;
+        agent.scoreTrack.idleStreak = 0;
         recomputeAgentScores(this.state);
         return { agentId, action, result: "applied" };
       }
@@ -497,11 +513,13 @@ export class Simulation {
         });
         this.placementSequence += 1;
         agent.scoreTrack.structuresPlaced += 1;
+        agent.scoreTrack.idleStreak = 0;
         recomputeAgentScores(this.state);
         return { agentId, action, result: "applied" };
       }
       case "wait": {
         agent.stamina = Math.min(100, agent.stamina + action.ticks * 2);
+        agent.scoreTrack.idleStreak += 1;
         recomputeAgentScores(this.state);
         return { agentId, action, result: "applied" };
       }
@@ -521,6 +539,10 @@ export class Simulation {
         if (recipient.inbox.length > 20) {
           recipient.inbox = recipient.inbox.slice(-20);
         }
+        if (agent.relations[recipient.id] === "ally") {
+          agent.scoreTrack.cooperativeTalks += 1;
+        }
+        agent.scoreTrack.idleStreak = 0;
         recomputeAgentScores(this.state);
         return { agentId, action, result: "applied" };
       }
@@ -533,6 +555,7 @@ export class Simulation {
           return { agentId, action, result: "rejected", reason: "cannot_set_self_relation" };
         }
         agent.relations[target.id] = action.relation;
+        agent.scoreTrack.idleStreak = 0;
         recomputeAgentScores(this.state);
         return { agentId, action, result: "applied" };
       }
@@ -552,6 +575,10 @@ export class Simulation {
           inventory: { ...target.inventory },
           tick: this.state.tick
         };
+        if (agent.relations[target.id] === "enemy") {
+          agent.scoreTrack.tacticalInspects += 1;
+        }
+        agent.scoreTrack.idleStreak = 0;
         recomputeAgentScores(this.state);
         return { agentId, action, result: "applied" };
       }
@@ -576,6 +603,7 @@ export class Simulation {
         }
         target.inventory = {};
         agent.scoreTrack.successfulLoots += 1;
+        agent.scoreTrack.idleStreak = 0;
         recomputeAgentScores(this.state);
         return { agentId, action, result: "applied" };
       }

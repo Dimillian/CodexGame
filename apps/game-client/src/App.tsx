@@ -1,6 +1,6 @@
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import Phaser from "phaser";
-import type { RuntimeModelOption, ServerMessage, SessionPhase } from "@codexgame/protocol";
+import type { RuntimeModelOption, ServerMessage, SessionPhase, WorldNearbyEntity } from "@codexgame/protocol";
 import { PROTOCOL_VERSION } from "@codexgame/protocol";
 import { GodConsoleSidebar } from "./components/GodConsoleSidebar";
 import { IsometricScene, type IsoSnapshot } from "./game/IsometricScene";
@@ -34,7 +34,30 @@ type RuntimeAgent = {
   maxHp: number;
   alive: boolean;
   inventory: Record<string, number>;
-  nearbyEntities: Array<{ id: string; type: string; distance: number }>;
+  score: {
+    survival: number;
+    progression: number;
+    social: number;
+    total: number;
+  };
+  scoreTrack: {
+    creatureKills: number;
+    enemyAgentKills: number;
+    successfulLoots: number;
+    crafts: number;
+    structuresPlaced: number;
+    cooperativeTalks: number;
+    tacticalInspects: number;
+    idleStreak: number;
+  };
+  knownPeerInventories?: Record<string, { inventory: Record<string, number>; tick: number }>;
+  nearbyEntities: WorldNearbyEntity[];
+  relations: {
+    allies: string[];
+    enemies: string[];
+    neutral: string[];
+  };
+  inbox: Array<{ fromAgentId: string; message: string; tick: number }>;
   model: string | null;
   effort: string;
 };
@@ -80,6 +103,36 @@ function effortOptionsForModel(modelValue: string, availableModels: RuntimeModel
 function defaultModelValue(availableModels: RuntimeModelOption[]): string {
   const defaultModel = availableModels.find((model) => model.isDefault) ?? availableModels[0];
   return defaultModel?.model ?? "";
+}
+
+function describeActionEvent(payload: Extract<ServerMessage, { type: "agent.action" }>["payload"]): string {
+  const suffix = payload.reason ? ` (${payload.reason.replaceAll("_", " ")})` : "";
+  switch (payload.action.type) {
+    case "move":
+      return `${payload.action.type} ${payload.action.direction} x${payload.action.steps}: ${payload.result}${suffix}`;
+    case "talk":
+      return `talk -> ${payload.action.toAgentId}: "${payload.action.message}" (${payload.result}${payload.reason ? `, ${payload.reason.replaceAll("_", " ")}` : ""})`;
+    case "set_relation":
+      return `relation ${payload.action.targetAgentId} -> ${payload.action.relation}: ${payload.result}${suffix}`;
+    case "inspect_agent":
+      return `inspect ${payload.action.targetAgentId}: ${payload.result}${suffix}`;
+    case "loot_agent":
+      return `loot ${payload.action.targetAgentId}: ${payload.result}${suffix}`;
+    case "attack":
+      return `attack ${payload.action.targetId}: ${payload.result}${suffix}`;
+    case "gather":
+      return `gather ${payload.action.targetId}: ${payload.result}${suffix}`;
+    case "craft":
+      return `craft ${payload.action.recipeId}: ${payload.result}${suffix}`;
+    case "place":
+      return `place ${payload.action.prefabId} @(${payload.action.x},${payload.action.y}): ${payload.result}${suffix}`;
+    case "wait":
+      return `wait ${payload.action.ticks}: ${payload.result}${suffix}`;
+    case "interact":
+      return `interact ${payload.action.targetId}: ${payload.result}${suffix}`;
+    default:
+      return `action ${payload.result}${suffix}`;
+  }
 }
 
 export default function App() {
@@ -257,6 +310,11 @@ export default function App() {
         case "agent.feed":
           appendFeed(message.payload.role, message.payload.text, message.payload.agentId);
           return;
+        case "agent.action":
+          if (message.payload.result !== "accepted") {
+            appendFeed("system", describeActionEvent(message.payload), message.payload.agentId);
+          }
+          return;
         case "agent.turn":
           setLatencyMs(message.payload.latencyMs);
           return;
@@ -380,6 +438,34 @@ export default function App() {
         owned: selectedAgent.inventory[prefab.id] ?? 0
       }));
   }, [catalog.prefabs, selectedAgent]);
+
+  const selectedRelations = useMemo(() => {
+    if (!selectedAgent) {
+      return { allies: [] as string[], enemies: [] as string[], neutral: [] as string[] };
+    }
+    return selectedAgent.relations;
+  }, [selectedAgent]);
+
+  const recentInboxRows = useMemo(() => {
+    if (!selectedAgent) {
+      return [] as Array<{ fromAgentId: string; message: string; tick: number }>;
+    }
+    return selectedAgent.inbox.slice(-4).reverse();
+  }, [selectedAgent]);
+
+  const knownPeerInventoryRows = useMemo(() => {
+    if (!selectedAgent) {
+      return [] as Array<{ agentId: string; tick: number; itemCount: number }>;
+    }
+    return Object.entries(selectedAgent.knownPeerInventories ?? {})
+      .map(([agentId, snapshot]) => ({
+        agentId,
+        tick: snapshot.tick,
+        itemCount: Object.values(snapshot.inventory).reduce((sum, count) => sum + Math.max(0, count), 0)
+      }))
+      .sort((a, b) => b.tick - a.tick)
+      .slice(0, 4);
+  }, [selectedAgent]);
 
   function send(payload: Record<string, unknown>): void {
     const ws = wsRef.current;
@@ -567,20 +653,72 @@ export default function App() {
           <div className="game-hud">
             <div className="hud-card">
               <h3>Selected Agent</h3>
-              <p>Tick: {tick}</p>
-              <p>Agent: {selectedAgent?.id ?? "-"}</p>
-              <p>Status: {selectedAgent?.alive ? "alive" : "down"}</p>
-              <p>
-                HP: {selectedAgent?.hp ?? 0}/{selectedAgent?.maxHp ?? 0}
+              <div className="hud-grid">
+                <p>Tick</p>
+                <p>{tick}</p>
+                <p>Agent</p>
+                <p>{selectedAgent?.id ?? "-"}</p>
+                <p>Pos</p>
+                <p>
+                  {selectedAgent ? `${selectedAgent.x},${selectedAgent.y}` : "-"}
+                </p>
+                <p>Status</p>
+                <p>{selectedAgent?.alive ? "alive" : "down"}</p>
+                <p>HP</p>
+                <p>
+                  {selectedAgent?.hp ?? 0}/{selectedAgent?.maxHp ?? 0}
+                </p>
+                <p>Stamina</p>
+                <p>{selectedAgent?.stamina ?? 0}</p>
+              </div>
+            </div>
+
+            <div className="hud-card">
+              <h3>Score</h3>
+              <div className="hud-grid">
+                <p>Total</p>
+                <p className="ok">{selectedAgent?.score.total ?? 0}</p>
+                <p>Survival</p>
+                <p>{selectedAgent?.score.survival ?? 0}</p>
+                <p>Progress</p>
+                <p>{selectedAgent?.score.progression ?? 0}</p>
+                <p>Social</p>
+                <p>{selectedAgent?.score.social ?? 0}</p>
+              </div>
+              <p className="muted">Track: craft {selectedAgent?.scoreTrack.crafts ?? 0} | place {selectedAgent?.scoreTrack.structuresPlaced ?? 0}</p>
+              <p className="muted">
+                Track: coop-talk {selectedAgent?.scoreTrack.cooperativeTalks ?? 0} | inspect {selectedAgent?.scoreTrack.tacticalInspects ?? 0} | idle{" "}
+                {selectedAgent?.scoreTrack.idleStreak ?? 0}
               </p>
-              <p>Stamina: {selectedAgent?.stamina ?? 0}</p>
+            </div>
+
+            <div className="hud-card">
+              <h3>Social</h3>
+              <p>Allies: {selectedRelations.allies.length ? selectedRelations.allies.join(", ") : "-"}</p>
+              <p>Enemies: {selectedRelations.enemies.length ? selectedRelations.enemies.join(", ") : "-"}</p>
+              <p>Known inventories: {knownPeerInventoryRows.length || 0}</p>
+              {knownPeerInventoryRows.map((row) => (
+                <p key={row.agentId} className="muted">
+                  {row.agentId}: {row.itemCount} item(s) @ tick {row.tick}
+                </p>
+              ))}
+              <p className="muted">Recent inbox:</p>
+              {recentInboxRows.length === 0 ? (
+                <p className="muted">None</p>
+              ) : (
+                recentInboxRows.map((row, index) => (
+                  <p key={`${row.fromAgentId}-${row.tick}-${index}`} className="muted">
+                    t{row.tick} {row.fromAgentId}: {row.message}
+                  </p>
+                ))
+              )}
             </div>
 
             <div className="hud-card">
               <h3>Agents</h3>
               {runtimeAgents.map((agent) => (
                 <p key={agent.id} className={agent.id === selectedAgent?.id ? "ok" : undefined}>
-                  {agent.id} {agent.hp}/{agent.maxHp}
+                  {agent.id} HP {agent.hp}/{agent.maxHp} | score {agent.score.total}
                 </p>
               ))}
             </div>

@@ -90,6 +90,8 @@ export function buildSnapshot(state: SimulationState): WorldSnapshot {
 
 export function buildPromptContext(snapshot: WorldSnapshot, agentId: string): string {
   const self = snapshot.agents.find((agent) => agent.id === agentId);
+  const allyIds = new Set(self?.relations.allies ?? []);
+  const enemyIds = new Set(self?.relations.enemies ?? []);
   const peers = snapshot.agents
     .filter((agent) => agent.id !== agentId)
     .map((agent) => ({
@@ -108,6 +110,27 @@ export function buildPromptContext(snapshot: WorldSnapshot, agentId: string): st
           ? "enemy"
           : "neutral"
     }));
+  const nearbyAllies = peers.filter((peer) => peer.alive && allyIds.has(peer.id) && distance(self?.x ?? 0, self?.y ?? 0, peer.x, peer.y) <= 3).length;
+  const nearbyEnemies = peers.filter((peer) => peer.alive && enemyIds.has(peer.id) && distance(self?.x ?? 0, self?.y ?? 0, peer.x, peer.y) <= 3).length;
+  const milestones: string[] = [];
+  if ((self?.scoreTrack.crafts ?? 0) < 1) {
+    milestones.push("Craft at least one useful item soon.");
+  }
+  if ((self?.scoreTrack.structuresPlaced ?? 0) < 1) {
+    milestones.push("Place at least one structure when inventory allows.");
+  }
+  if ((self?.relations.allies.length ?? 0) > 0 && (self?.scoreTrack.cooperativeTalks ?? 0) < 2) {
+    milestones.push("Send a concrete coordination update to an ally.");
+  }
+  if ((self?.scoreTrack.idleStreak ?? 0) >= 2) {
+    milestones.push("Break idle loop: prefer gather/craft/place/inspect over repeated wait/interact.");
+  }
+  if ((self?.relations.enemies.length ?? 0) > 0 && nearbyEnemies > 0) {
+    milestones.push("If combat is risky, inspect enemy first and reposition before attacking.");
+  }
+  if (milestones.length === 0) {
+    milestones.push("Continue safe progression while keeping allies informed.");
+  }
 
   return JSON.stringify(
     {
@@ -122,9 +145,17 @@ export function buildPromptContext(snapshot: WorldSnapshot, agentId: string): st
         goals: [
           "Prioritize survival and low-risk positioning.",
           "Progress by gathering/crafting/placing to improve progression score.",
-          "Use social actions strategically; aggression should be conditional, not default."
+          "Cooperate with allies using meaningful talk updates.",
+          "Use social actions strategically; aggression should be conditional, not default.",
+          "Avoid repeating wait/interact when better actions are available."
         ]
       },
+      tacticalHints: {
+        nearbyAllies,
+        nearbyEnemies,
+        recommendedActionBias: "gather over interact for resources"
+      },
+      milestones,
       peers,
       recentInbox: (self?.inbox ?? []).slice(-8),
       constraints: {

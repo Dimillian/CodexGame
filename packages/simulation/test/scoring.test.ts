@@ -82,4 +82,35 @@ describe("scoring", () => {
     expect(a1.score.social).toBeGreaterThan(beforeSocial);
     expect(a1.score.survival).toBeGreaterThanOrEqual(a1.score.social);
   });
+
+  it("rewards cooperative talk and penalizes repeated idle actions", () => {
+    const simulation = new Simulation(903, 12, 12, content, [
+      { id: "agent-1", name: "Agent 1" },
+      { id: "agent-2", name: "Agent 2" }
+    ]);
+    flattenToPlains(simulation);
+    const state = simulation.getState();
+    const a1 = state.agents.find((agent) => agent.id === "agent-1")!;
+    const a2 = state.agents.find((agent) => agent.id === "agent-2")!;
+    a1.x = 4;
+    a1.y = 4;
+    a2.x = 5;
+    a2.y = 4;
+
+    const setAlly = simulation.applyAction("agent-1", { type: "set_relation", targetAgentId: "agent-2", relation: "ally" });
+    expect(setAlly.result).toBe("applied");
+    const socialBeforeTalk = a1.score.social;
+    const talk = simulation.applyAction("agent-1", { type: "talk", toAgentId: "agent-2", message: "I will gather wood; you scout." });
+    expect(talk.result).toBe("applied");
+    expect(a1.scoreTrack.cooperativeTalks).toBe(1);
+    expect(a1.score.social).toBeGreaterThanOrEqual(socialBeforeTalk);
+
+    const progressionBeforeIdle = a1.score.progression;
+    const wait1 = simulation.applyAction("agent-1", { type: "wait", ticks: 1 });
+    const wait2 = simulation.applyAction("agent-1", { type: "wait", ticks: 1 });
+    expect(wait1.result).toBe("applied");
+    expect(wait2.result).toBe("applied");
+    expect(a1.scoreTrack.idleStreak).toBeGreaterThan(0);
+    expect(a1.score.progression).toBeLessThanOrEqual(progressionBeforeIdle);
+  });
 });

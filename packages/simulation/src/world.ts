@@ -369,7 +369,10 @@ function buildAgentState(config: AgentConfig, x: number, y: number): AgentState 
       enemyAgentKills: 0,
       successfulLoots: 0,
       crafts: 0,
-      structuresPlaced: 0
+      structuresPlaced: 0,
+      cooperativeTalks: 0,
+      tacticalInspects: 0,
+      idleStreak: 0
     },
     knownAgentInventories: {},
     relations: {},

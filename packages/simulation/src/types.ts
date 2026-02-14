@@ -57,6 +57,9 @@ export type AgentScoreTrack = {
   successfulLoots: number;
   crafts: number;
   structuresPlaced: number;
+  cooperativeTalks: number;
+  tacticalInspects: number;
+  idleStreak: number;
 };
 
 export type AgentState = {

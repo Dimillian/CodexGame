@@ -167,7 +167,17 @@ export type ServerMessage =
             successfulLoots: number;
             crafts: number;
             structuresPlaced: number;
+            cooperativeTalks: number;
+            tacticalInspects: number;
+            idleStreak: number;
           };
+          knownPeerInventories: Record<
+            string,
+            {
+              inventory: Record<string, number>;
+              tick: number;
+            }
+          >;
           nearbyEntities: WorldNearbyEntity[];
           relations: {
             allies: string[];
