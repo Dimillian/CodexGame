@@ -19,6 +19,8 @@ describe("ui_runtime_contract", () => {
       type: "session.state",
       payload: {
         phase: "running",
+        paused: false,
+        preparedSeed: null,
         threadIds: { gameplay: "thr-a" },
         connected: true,
         runtime: {

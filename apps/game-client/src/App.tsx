@@ -65,6 +65,7 @@ export default function App() {
   const [buildGoal, setBuildGoal] = useState("");
   const [chatText, setChatText] = useState("");
   const [paused, setPaused] = useState(false);
+  const [preparedSeed, setPreparedSeed] = useState<number | null>(null);
   const [selectedModelId, setSelectedModelId] = useState<string>("");
   const [effort, setEffort] = useState<TurnEffort>("low");
   const [availableModels, setAvailableModels] = useState<RuntimeModelOption[]>([]);
@@ -147,12 +148,21 @@ export default function App() {
       switch (message.type) {
         case "session.state":
           setPhase(message.payload.phase);
+          setPaused(message.payload.paused);
+          setPreparedSeed(message.payload.preparedSeed);
           setThreadIds(message.payload.threadIds);
           setRuntimeModel(message.payload.runtime.model);
           setRuntimeEffort(message.payload.runtime.effort);
           setRuntimeSchedulerMs(message.payload.runtime.schedulerMs);
           setRuntimeQueueAhead(message.payload.runtime.maxQueuedActionsBeforeTurn);
           setAvailableModels(message.payload.runtime.availableModels);
+          if (message.payload.phase === "idle") {
+            setTick(0);
+            setStamina(0);
+            setInventory({});
+            setNearbyResources([]);
+            sceneRef.current?.clearSnapshot();
+          }
           return;
         case "world.snapshot": {
           const nextSnapshot: IsoSnapshot = {
@@ -311,11 +321,12 @@ export default function App() {
     ws.send(JSON.stringify(payload));
   }
 
-  function startSession(): void {
+  function startSession(seed?: number): void {
     send({
       version: PROTOCOL_VERSION,
       type: "session.start",
       payload: {
+        seed,
         model: selectedModel?.model ?? undefined,
         effort
       }
@@ -323,17 +334,50 @@ export default function App() {
   }
 
   function togglePause(): void {
-    const next = !paused;
-    setPaused(next);
     send({
       version: PROTOCOL_VERSION,
-      type: next ? "agent.pause" : "agent.resume",
+      type: paused ? "agent.resume" : "agent.pause",
       payload: {}
     });
   }
 
+  function prepareNewWorld(): void {
+    const nextSeed = Math.floor(Math.random() * 1_000_000_000);
+    setFeed([]);
+    setChatText("");
+    setBuildGoal("");
+    setLatencyMs(0);
+    setTick(0);
+    setStamina(0);
+    setInventory({});
+    setNearbyResources([]);
+    setCatalog({ prefabs: [], recipes: [] });
+    setPhase("idle");
+    setPaused(false);
+    setPreparedSeed(nextSeed);
+    sceneRef.current?.clearSnapshot();
+    send({
+      version: PROTOCOL_VERSION,
+      type: "session.reset",
+      payload: {
+        seed: nextSeed
+      }
+    });
+  }
+
+  function onSessionPrimaryAction(): void {
+    if (phase === "running") {
+      togglePause();
+      return;
+    }
+    startSession(preparedSeed ?? undefined);
+  }
+
   function onBuildRequest(event: FormEvent): void {
     event.preventDefault();
+    if (phase !== "running") {
+      return;
+    }
     send({
       version: PROTOCOL_VERSION,
       type: "build.request",
@@ -345,6 +389,9 @@ export default function App() {
 
   function onChatSend(event: FormEvent): void {
     event.preventDefault();
+    if (phase !== "running") {
+      return;
+    }
     const text = chatText.trim();
     if (!text) {
       return;
@@ -360,6 +407,9 @@ export default function App() {
   }
 
   function onChatKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
+    if (phase !== "running") {
+      return;
+    }
     if (event.key !== "Enter") {
       return;
     }
@@ -377,6 +427,11 @@ export default function App() {
     });
     setChatText("");
   }
+
+  const primarySessionLabel = phase === "running" ? (paused ? "Resume" : "Pause") : phase === "starting" ? "Starting..." : "Start";
+  const primarySessionDisabled = !connected || phase === "starting";
+  const worldSeedLabel = preparedSeed ? `Next World Seed: ${preparedSeed}` : "Next World Seed: random";
+  const worldInteractionEnabled = phase === "running";
 
   return (
     <div className="app">
@@ -456,37 +511,52 @@ export default function App() {
         <div className="console-meta">
           <span className="pill">{threadSummary}</span>
           <span className="pill">Queue-ahead: {runtimeQueueAhead || "-"}</span>
+          <span className="pill">{worldSeedLabel}</span>
         </div>
         <div className="session-controls">
-          <select
-            aria-label="Model"
-            value={selectedModelId}
-            onChange={(event) => setSelectedModelId(event.target.value)}
-          >
-            <option value="">Default model</option>
-            {availableModels.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.displayName || model.model}
-              </option>
-            ))}
-          </select>
-          <select
-            aria-label="Reasoning effort"
-            value={effort}
-            onChange={(event) => setEffort(event.target.value as TurnEffort)}
-          >
-            {effortOptions.map((effortOption) => (
-              <option key={effortOption} value={effortOption}>
-                {effortOption}
-              </option>
-            ))}
-          </select>
-          <button type="button" onClick={startSession} className="button-compact">
-            Start
-          </button>
-          <button type="button" onClick={togglePause} className="button-compact">
-            {paused ? "Resume" : "Pause"}
-          </button>
+          <div className="session-controls-selects">
+            <select
+              aria-label="Model"
+              value={selectedModelId}
+              onChange={(event) => setSelectedModelId(event.target.value)}
+            >
+              <option value="">Default model</option>
+              {availableModels.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.displayName || model.model}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Reasoning effort"
+              value={effort}
+              onChange={(event) => setEffort(event.target.value as TurnEffort)}
+            >
+              {effortOptions.map((effortOption) => (
+                <option key={effortOption} value={effortOption}>
+                  {effortOption}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="session-controls-actions">
+            <button
+              type="button"
+              onClick={onSessionPrimaryAction}
+              className="button-compact"
+              disabled={primarySessionDisabled}
+            >
+              {primarySessionLabel}
+            </button>
+            <button
+              type="button"
+              onClick={prepareNewWorld}
+              className="button-compact"
+              disabled={!connected || phase === "starting"}
+            >
+              New
+            </button>
+          </div>
         </div>
         <div className="console-hint muted">Models from app-server: {availableModels.length}</div>
 
@@ -508,9 +578,12 @@ export default function App() {
             <input
               value={buildGoal}
               onChange={(event) => setBuildGoal(event.target.value)}
+              disabled={!worldInteractionEnabled}
               placeholder="Example: add a wooden shield recipe (3 wood, 2 fiber, output 1 wooden_shield)"
             />
-            <button type="submit">Build</button>
+            <button type="submit" disabled={!worldInteractionEnabled}>
+              Build
+            </button>
           </form>
 
           <form onSubmit={onChatSend}>
@@ -519,10 +592,13 @@ export default function App() {
               value={chatText}
               onChange={(event) => setChatText(event.target.value)}
               onKeyDown={onChatKeyDown}
+              disabled={!worldInteractionEnabled}
               placeholder="Speak to the on-screen Codex agent..."
             />
             <div className="row chat-send-row">
-              <button type="submit">Send</button>
+              <button type="submit" disabled={!worldInteractionEnabled}>
+                Send
+              </button>
             </div>
           </form>
         </div>

@@ -50,6 +50,13 @@ export type ClientMessage =
       version: Version;
       type: "agent.resume";
       payload: Record<string, never>;
+    }
+  | {
+      version: Version;
+      type: "session.reset";
+      payload: {
+        seed?: number | undefined;
+      };
     };
 
 export type WorldNearbyEntity = {
@@ -66,6 +73,8 @@ export type ServerMessage =
       type: "session.state";
       payload: {
         phase: SessionPhase;
+        paused: boolean;
+        preparedSeed: number | null;
         threadIds: { gameplay?: string; builder?: string };
         connected: boolean;
         runtime: {
@@ -206,6 +215,13 @@ const clientMessageSchema = z.discriminatedUnion("type", [
     version: z.literal(PROTOCOL_VERSION),
     type: z.literal("agent.resume"),
     payload: z.object({}).strict()
+  }),
+  z.object({
+    version: z.literal(PROTOCOL_VERSION),
+    type: z.literal("session.reset"),
+    payload: z.object({
+      seed: z.number().int().optional()
+    })
   })
 ]);
 

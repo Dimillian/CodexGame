@@ -25,6 +25,22 @@ function adjacent(ax: number, ay: number, bx: number, by: number): boolean {
   return Math.abs(ax - bx) <= 1 && Math.abs(ay - by) <= 1;
 }
 
+function cloneState(state: SimulationState): SimulationState {
+  return {
+    width: state.width,
+    height: state.height,
+    seed: state.seed,
+    tick: state.tick,
+    tiles: state.tiles.map((row) => row.map((tile) => ({ terrain: tile.terrain }))),
+    entities: state.entities.map((entity) => ({ ...entity })),
+    placements: state.placements.map((placement) => ({ ...placement })),
+    actor: {
+      ...state.actor,
+      inventory: { ...state.actor.inventory }
+    }
+  };
+}
+
 export class Simulation {
   private state: SimulationState;
 
@@ -35,6 +51,13 @@ export class Simulation {
   public constructor(seed: number, width: number, height: number, content: ContentSet) {
     this.content = content;
     this.state = createInitialState(seed, width, height, content);
+  }
+
+  public static fromState(state: SimulationState, content: ContentSet): Simulation {
+    const simulation = new Simulation(state.seed, state.width, state.height, content);
+    simulation.state = cloneState(state);
+    simulation.placementSequence = state.placements.length;
+    return simulation;
   }
 
   public setContent(content: ContentSet): void {

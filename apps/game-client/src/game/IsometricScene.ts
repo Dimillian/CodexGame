@@ -198,6 +198,7 @@ function resourceColor(subtype: string): number {
 
 export class IsometricScene extends Phaser.Scene {
   private snapshot: IsoSnapshot | null = null;
+  private sceneReady = false;
   private cameraKeys: CameraKeys | null = null;
   private cameraFollowActor = true;
 
@@ -223,6 +224,7 @@ export class IsometricScene extends Phaser.Scene {
   }
 
   public create(): void {
+    this.sceneReady = true;
     this.cameras.main.setBackgroundColor("#10161f");
     this.cameras.main.setZoom(DEFAULT_ZOOM);
 
@@ -256,12 +258,24 @@ export class IsometricScene extends Phaser.Scene {
       this.hoverElement?.remove();
       this.hoverElement = null;
       this.destroyAllRenderObjects();
+      this.sceneReady = false;
     });
+
+    this.syncRenderState();
   }
 
   public setSnapshot(snapshot: IsoSnapshot): void {
     this.snapshot = snapshot;
+    if (!this.sceneReady) {
+      return;
+    }
     this.syncRenderState();
+  }
+
+  public clearSnapshot(): void {
+    this.snapshot = null;
+    this.destroyAllRenderObjects();
+    this.hideHover();
   }
 
   public override update(_time: number, delta: number): void {
@@ -926,7 +940,7 @@ export class IsometricScene extends Phaser.Scene {
   }
 
   private syncRenderState(): void {
-    if (!this.snapshot) {
+    if (!this.snapshot || !this.sceneReady) {
       return;
     }
 

@@ -150,6 +150,8 @@ export class GameRuntimeServer {
 
   private availableModels: RuntimeModelOption[] = [];
 
+  private preparedSeed: number | null = null;
+
   public constructor(private readonly port: number) {
     this.wsServer = new WebSocketServer({ port: this.port });
     this.registerWsHandlers();
@@ -161,6 +163,7 @@ export class GameRuntimeServer {
     await fs.mkdir(runtimeConfig.runtimeDir, { recursive: true });
     await this.replay.start(runtimeConfig.replayDir);
     await this.logReplay("runtime.started", { port: this.port });
+    await this.restoreSession();
     this.startTimers();
     void this.primeCodexModelCatalog();
   }
@@ -244,6 +247,9 @@ export class GameRuntimeServer {
     try {
       await this.ensureCodexConnected();
       await this.refreshModelCatalog();
+      if (this.simulation && !this.threadIds.gameplay && !this.threadIds.builder) {
+        await this.startThreadsForExistingSession();
+      }
     } catch (error) {
       this.emitError("model_catalog_unavailable", (error as Error).message, true);
     }
@@ -261,6 +267,25 @@ export class GameRuntimeServer {
     await this.logReplay("runtime.models_refreshed", { count: parsed.length });
   }
 
+  private async startThreadsForExistingSession(): Promise<void> {
+    const gameplay = await this.codexClient.request("thread/start", {
+      cwd: runtimeConfig.codexCwd,
+      approvalPolicy: "never"
+    });
+    const builder = await this.codexClient.request("thread/start", {
+      cwd: runtimeConfig.codexCwd,
+      approvalPolicy: "never"
+    });
+
+    this.threadIds = {
+      gameplay: ensureThreadId(gameplay),
+      builder: ensureThreadId(builder)
+    };
+    this.sendSessionState();
+    this.sendWorldSnapshot();
+    await this.logReplay("session.threads_initialized", { source: "restore", threadIds: this.threadIds as Record<string, unknown> });
+  }
+
   private async handleClientMessage(_socket: WebSocket, raw: string): Promise<void> {
     let message: ClientMessage;
     try {
@@ -275,6 +300,9 @@ export class GameRuntimeServer {
     switch (message.type) {
       case "session.start":
         await this.startSession(message.payload);
+        return;
+      case "session.reset":
+        await this.resetSession(message.payload.seed);
         return;
       case "god.send":
         this.godQueue.push(message.payload.text);
@@ -312,6 +340,7 @@ export class GameRuntimeServer {
       }
       case "agent.pause":
         this.paused = true;
+        await this.interruptActiveTurn();
         this.sendSessionState();
         return;
       case "agent.resume":
@@ -329,7 +358,8 @@ export class GameRuntimeServer {
     }
 
     this.phase = "starting";
-    this.seed = payload.seed ?? randomSeed();
+    this.seed = payload.seed ?? this.preparedSeed ?? randomSeed();
+    this.preparedSeed = null;
     this.actionQueue = [];
     this.godQueue = [];
     this.invalidStreak = 0;
@@ -371,14 +401,42 @@ export class GameRuntimeServer {
     }
   }
 
+  private async resetSession(seed?: number): Promise<void> {
+    await this.interruptActiveTurn();
+    this.cancelPendingTurns("session_reset");
+    this.simulation = null;
+    this.phase = "idle";
+    this.paused = false;
+    this.seed = 0;
+    this.preparedSeed = typeof seed === "number" ? seed : randomSeed();
+    this.threadIds = {};
+    this.actionQueue = [];
+    this.godQueue = [];
+    this.activeTurnId = null;
+    this.invalidStreak = 0;
+    this.godPriorityPending = false;
+    this.autoplayBackoffUntil = 0;
+    this.reasoningBuffers.clear();
+    this.interruptedTurnIds.clear();
+    this.metrics.setQueueDepth(0);
+    await this.stateStore.clear();
+    this.sendSessionState();
+    await this.logReplay("session.reset", { preparedSeed: this.preparedSeed });
+  }
+
   private tick(): void {
     if (!this.simulation || this.phase !== "running") {
       return;
     }
 
+    if (this.paused) {
+      this.metrics.setQueueDepth(this.actionQueue.length);
+      return;
+    }
+
     this.simulation.tick();
 
-    const nextAction = this.paused ? undefined : this.actionQueue.shift();
+    const nextAction = this.actionQueue.shift();
     if (nextAction) {
       const result = this.simulation.applyAction(nextAction);
       if (result.result === "applied") {
@@ -917,6 +975,8 @@ export class GameRuntimeServer {
       type: "session.state",
       payload: {
         phase: this.phase,
+        paused: this.paused,
+        preparedSeed: this.preparedSeed,
         threadIds: this.threadIds,
         connected: this.connected,
         runtime: {
@@ -972,14 +1032,102 @@ export class GameRuntimeServer {
       return;
     }
     const snapshot = this.simulation.getSnapshot();
+    const simulationState = structuredClone(this.simulation.getState());
     const sessionSnapshot: SessionSnapshot = {
       seed: this.seed,
       tick: snapshot.tick,
       actor: snapshot.actor,
       threadIds: this.threadIds,
-      metrics: this.metrics.snapshot()
+      metrics: this.metrics.snapshot(),
+      simulation: simulationState
     };
     await this.stateStore.save(sessionSnapshot);
+  }
+
+  private async restoreSession(): Promise<void> {
+    const saved = await this.stateStore.load();
+    if (!saved) {
+      return;
+    }
+
+    const content = this.contentStore.getContent();
+    if (saved.simulation) {
+      this.simulation = Simulation.fromState(saved.simulation, content);
+      this.seed = saved.simulation.seed;
+    } else if (typeof saved.seed === "number") {
+      this.simulation = new Simulation(saved.seed, DEFAULT_WORLD_SIZE, DEFAULT_WORLD_SIZE, content);
+      this.seed = saved.seed;
+      const state = this.simulation.getState();
+      if (typeof saved.tick === "number" && Number.isFinite(saved.tick)) {
+        state.tick = Math.max(0, Math.floor(saved.tick));
+      }
+      const actor = saved.actor;
+      if (actor && typeof actor === "object") {
+        if (typeof actor.x === "number") {
+          state.actor.x = Math.max(0, Math.min(state.width - 1, Math.floor(actor.x)));
+        }
+        if (typeof actor.y === "number") {
+          state.actor.y = Math.max(0, Math.min(state.height - 1, Math.floor(actor.y)));
+        }
+        if (
+          actor.facing === "N" ||
+          actor.facing === "NE" ||
+          actor.facing === "E" ||
+          actor.facing === "SE" ||
+          actor.facing === "S" ||
+          actor.facing === "SW" ||
+          actor.facing === "W" ||
+          actor.facing === "NW"
+        ) {
+          state.actor.facing = actor.facing;
+        }
+        if (typeof actor.stamina === "number" && Number.isFinite(actor.stamina)) {
+          state.actor.stamina = Math.max(0, Math.min(100, Math.floor(actor.stamina)));
+        }
+      }
+    } else {
+      return;
+    }
+
+    this.phase = "running";
+    this.preparedSeed = null;
+    this.threadIds = {};
+    this.actionQueue = [];
+    this.godQueue = [];
+    this.activeTurnId = null;
+    this.invalidStreak = 0;
+    this.godPriorityPending = false;
+    await this.logReplay("session.restored", {
+      seed: this.seed,
+      tick: this.simulation.getState().tick
+    });
+  }
+
+  private async interruptActiveTurn(): Promise<void> {
+    const turnId = this.activeTurnId;
+    if (!turnId) {
+      return;
+    }
+    const collector = this.pendingTurns.get(turnId);
+    if (!collector) {
+      return;
+    }
+    this.interruptedTurnIds.add(turnId);
+    try {
+      await this.codexClient.request("turn/interrupt", {
+        threadId: collector.threadId,
+        turnId
+      });
+    } catch {
+      this.interruptedTurnIds.delete(turnId);
+    }
+  }
+
+  private cancelPendingTurns(reason: string): void {
+    for (const collector of this.pendingTurns.values()) {
+      collector.reject(new Error(reason));
+    }
+    this.pendingTurns.clear();
   }
 
   private async logReplay(event: string, payload: Record<string, unknown>): Promise<void> {
