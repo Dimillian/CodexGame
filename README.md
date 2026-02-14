@@ -1,4 +1,4 @@
-![CodexGame](assets/HBDjPxTXcAAuv4y.jpeg)
+![CodexGame](assets/readme-screenshot-2026-02-14-150902.png)
 
 # CodexGame
 
