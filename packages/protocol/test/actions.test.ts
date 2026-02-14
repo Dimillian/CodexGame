@@ -7,10 +7,11 @@ describe("agentTurnOutputSchema", () => {
       narration: "Moving and waiting.",
       actions: [
         { type: "move", direction: "NE", steps: 2 },
+        { type: "attack", targetId: "npc-1" },
         { type: "wait", ticks: 2 }
       ]
     });
-    expect(parsed.actions).toHaveLength(2);
+    expect(parsed.actions).toHaveLength(3);
   });
 
   it("rejects invalid direction", () => {

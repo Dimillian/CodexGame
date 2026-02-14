@@ -65,6 +65,37 @@ export type WorldNearbyEntity = {
   x: number;
   y: number;
   distance: number;
+  hp?: number;
+  maxHp?: number;
+  hostile?: boolean;
+};
+
+type WorldResourceEntityMessage = {
+  id: string;
+  type: "resource";
+  subtype: string;
+  x: number;
+  y: number;
+  quantity: number;
+};
+
+type WorldCreatureEntityMessage = {
+  id: string;
+  type: "creature";
+  subtype: string;
+  x: number;
+  y: number;
+  quantity: number;
+  hp: number;
+  maxHp: number;
+  attack: number;
+  defense: number;
+  aggroRange: number;
+  attackRange: number;
+  cooldownTicks: number;
+  maxCooldownTicks: number;
+  hostile: boolean;
+  behaviorState: "idle" | "chase" | "attack";
 };
 
 export type ServerMessage =
@@ -97,14 +128,7 @@ export type ServerMessage =
           height: number;
           seed: number;
           tiles: string[][];
-          entities: Array<{
-            id: string;
-            type: "resource" | "creature";
-            subtype: string;
-            x: number;
-            y: number;
-            quantity: number;
-          }>;
+          entities: Array<WorldResourceEntityMessage | WorldCreatureEntityMessage>;
           placements: Array<{ id: string; prefabId: string; x: number; y: number }>;
         };
         actor: {
@@ -113,6 +137,13 @@ export type ServerMessage =
           y: number;
           facing: string;
           stamina: number;
+          hp: number;
+          maxHp: number;
+          attack: number;
+          defense: number;
+          attackRange: number;
+          cooldownTicks: number;
+          alive: boolean;
         };
         inventory: Record<string, number>;
         nearbyEntities: WorldNearbyEntity[];

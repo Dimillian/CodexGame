@@ -16,6 +16,7 @@ export function buildGameplayPrompt(snapshot: WorldSnapshot, godMessages: string
     "You are the in-world actor in a deterministic isometric sandbox.",
     "Output valid JSON only matching the provided schema. Never include markdown.",
     "You can gather resources, craft tools/weapons/structures from recipes, then place structures from inventory.",
+    "Hostile creatures exist. Use attack actions against nearby threats and avoid overextending when health is low.",
     "Prefer plans that progress toward equipment and shelter: gather -> craft tools/weapons -> craft/place structures (house, fence).",
     "Prefer safe, local, low-risk actions. Max 4 actions.",
     godInstruction,

@@ -6,7 +6,9 @@ export type Tile = {
   terrain: Terrain;
 };
 
-export type WorldEntity = {
+export type CreatureBehaviorState = "idle" | "chase" | "attack";
+
+export type WorldEntityBase = {
   id: string;
   type: "resource" | "creature";
   subtype: string;
@@ -14,6 +16,26 @@ export type WorldEntity = {
   y: number;
   quantity: number;
 };
+
+export type ResourceEntity = WorldEntityBase & {
+  type: "resource";
+};
+
+export type CreatureEntity = WorldEntityBase & {
+  type: "creature";
+  hp: number;
+  maxHp: number;
+  attack: number;
+  defense: number;
+  aggroRange: number;
+  attackRange: number;
+  cooldownTicks: number;
+  maxCooldownTicks: number;
+  hostile: boolean;
+  behaviorState: CreatureBehaviorState;
+};
+
+export type WorldEntity = ResourceEntity | CreatureEntity;
 
 export type Placement = {
   id: string;
@@ -28,6 +50,14 @@ export type ActorState = {
   y: number;
   facing: "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
   stamina: number;
+  hp: number;
+  maxHp: number;
+  attack: number;
+  defense: number;
+  attackRange: number;
+  cooldownTicks: number;
+  maxCooldownTicks: number;
+  alive: boolean;
   inventory: Record<string, number>;
 };
 
@@ -61,6 +91,9 @@ export type NearbyEntity = {
   x: number;
   y: number;
   distance: number;
+  hp?: number;
+  maxHp?: number;
+  hostile?: boolean;
 };
 
 export type WorldSnapshot = {
@@ -79,6 +112,13 @@ export type WorldSnapshot = {
     y: number;
     facing: ActorState["facing"];
     stamina: number;
+    hp: number;
+    maxHp: number;
+    attack: number;
+    defense: number;
+    attackRange: number;
+    cooldownTicks: number;
+    alive: boolean;
   };
   inventory: Record<string, number>;
   nearbyEntities: NearbyEntity[];

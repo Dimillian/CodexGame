@@ -1,6 +1,8 @@
-import type { ContentSet, Placement, SimulationState, Terrain, Tile, WorldEntity } from "./types";
+import type { ContentSet, CreatureEntity, Placement, SimulationState, Terrain, Tile, WorldEntity } from "./types";
 
 const TERRAIN_SMOOTHING_PASSES = 1;
+const CREATURE_SPAWN_SAFE_RADIUS = 8;
+const CREATURE_SPAWN_BASE_CHANCE_SCALE = 0.5;
 
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
@@ -174,12 +176,65 @@ function clusteredSpawnChance(baseChance: number, score: number, minMultiplier: 
   return clamp01(baseChance * multiplier);
 }
 
+function manhattanDistance(ax: number, ay: number, bx: number, by: number): number {
+  return Math.abs(ax - bx) + Math.abs(ay - by);
+}
+
+function creatureProfile(subtype: string): Omit<
+  CreatureEntity,
+  "id" | "type" | "subtype" | "x" | "y" | "quantity"
+> {
+  switch (subtype) {
+    case "wolf":
+      return {
+        hp: 14,
+        maxHp: 14,
+        attack: 3,
+        defense: 2,
+        aggroRange: 4,
+        attackRange: 1,
+        cooldownTicks: 0,
+        maxCooldownTicks: 4,
+        hostile: true,
+        behaviorState: "idle"
+      };
+    case "slime":
+      return {
+        hp: 9,
+        maxHp: 9,
+        attack: 2,
+        defense: 1,
+        aggroRange: 3,
+        attackRange: 1,
+        cooldownTicks: 0,
+        maxCooldownTicks: 5,
+        hostile: true,
+        behaviorState: "idle"
+      };
+    default:
+      return {
+        hp: 12,
+        maxHp: 12,
+        attack: 3,
+        defense: 1,
+        aggroRange: 5,
+        attackRange: 1,
+        cooldownTicks: 0,
+        maxCooldownTicks: 2,
+        hostile: true,
+        behaviorState: "idle"
+      };
+  }
+}
+
 function spawnEntities(
   tiles: Tile[][],
   width: number,
   height: number,
   seed: number,
-  content: ContentSet
+  content: ContentSet,
+  actorX: number,
+  actorY: number
 ): WorldEntity[] {
   const entities: WorldEntity[] = [];
   let sequence = 0;
@@ -217,18 +272,24 @@ function spawnEntities(
         if (spawnRule.biome !== tile.terrain) {
           continue;
         }
+        if (manhattanDistance(x, y, actorX, actorY) <= CREATURE_SPAWN_SAFE_RADIUS) {
+          continue;
+        }
         const spawnSalt = hashString(spawnRule.id, 257);
         const score = clusteredScore(seed, x, y, spawnSalt);
-        const spawnChance = clusteredSpawnChance(spawnRule.baseChance, score, 0.6, 2.2);
+        const baseChance = spawnRule.baseChance * CREATURE_SPAWN_BASE_CHANCE_SCALE;
+        const spawnChance = clusteredSpawnChance(baseChance, score, 0.35, 0.95);
         const roll = hashUnit(seed, x, y, spawnSalt + 1319);
         if (roll <= spawnChance) {
+          const profile = creatureProfile(spawnRule.entity);
           entities.push({
             id: `npc-${sequence}`,
             type: "creature",
             subtype: spawnRule.entity,
             x,
             y,
-            quantity: 1
+            quantity: 1,
+            ...profile
           });
           sequence += 1;
           break;
@@ -257,7 +318,7 @@ export function createInitialState(
   tiles = smoothTerrain(tiles, width, height);
 
   const actorPosition = defaultActorPosition(tiles, width, height);
-  const entities = spawnEntities(tiles, width, height, seed, content);
+  const entities = spawnEntities(tiles, width, height, seed, content, actorPosition.x, actorPosition.y);
   const placements: Placement[] = [];
 
   return {
@@ -274,6 +335,14 @@ export function createInitialState(
       y: actorPosition.y,
       facing: "S",
       stamina: 100,
+      hp: 40,
+      maxHp: 40,
+      attack: 5,
+      defense: 3,
+      attackRange: 1,
+      cooldownTicks: 0,
+      maxCooldownTicks: 2,
+      alive: true,
       inventory: {}
     }
   };

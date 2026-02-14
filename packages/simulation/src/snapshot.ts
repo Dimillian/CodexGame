@@ -5,13 +5,22 @@ function distance(ax: number, ay: number, bx: number, by: number): number {
 }
 
 function toNearbyEntity(actorX: number, actorY: number, entity: WorldEntity): NearbyEntity {
-  return {
+  const base: NearbyEntity = {
     id: entity.id,
     type: `${entity.type}:${entity.subtype}`,
     x: entity.x,
     y: entity.y,
     distance: distance(actorX, actorY, entity.x, entity.y)
   };
+  if (entity.type === "creature") {
+    return {
+      ...base,
+      hp: entity.hp,
+      maxHp: entity.maxHp,
+      hostile: entity.hostile
+    };
+  }
+  return base;
 }
 
 export function buildSnapshot(state: SimulationState): WorldSnapshot {
@@ -36,7 +45,14 @@ export function buildSnapshot(state: SimulationState): WorldSnapshot {
       x: state.actor.x,
       y: state.actor.y,
       facing: state.actor.facing,
-      stamina: state.actor.stamina
+      stamina: state.actor.stamina,
+      hp: state.actor.hp,
+      maxHp: state.actor.maxHp,
+      attack: state.actor.attack,
+      defense: state.actor.defense,
+      attackRange: state.actor.attackRange,
+      cooldownTicks: state.actor.cooldownTicks,
+      alive: state.actor.alive
     },
     inventory: { ...state.actor.inventory },
     nearbyEntities

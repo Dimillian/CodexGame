@@ -22,6 +22,9 @@ type EntityRender = {
   x: number;
   y: number;
   quantity: number;
+  hp: number | undefined;
+  maxHp: number | undefined;
+  behaviorState: "idle" | "chase" | "attack" | undefined;
   object: Phaser.GameObjects.GameObject;
 };
 
@@ -49,6 +52,9 @@ export type IsoSnapshot = {
     x: number;
     y: number;
     quantity: number;
+    hp?: number;
+    maxHp?: number;
+    behaviorState?: "idle" | "chase" | "attack";
   }>;
   actor: {
     x: number;
@@ -751,6 +757,9 @@ export class IsometricScene extends Phaser.Scene {
       x: entity.x,
       y: entity.y,
       quantity: entity.quantity,
+      hp: entity.hp,
+      maxHp: entity.maxHp,
+      behaviorState: entity.behaviorState,
       object: this.add.circle(0, 0, 1, 0xffffff, 1)
     };
     render.object.destroy();
@@ -781,7 +790,12 @@ export class IsometricScene extends Phaser.Scene {
       if (render.type === "resource") {
         return [`Resource: ${render.subtype}`, `Qty: ${render.quantity}`, `Tile: (${render.x}, ${render.y})`];
       }
-      return [`Creature: ${render.subtype}`, `Tile: (${render.x}, ${render.y})`];
+      return [
+        `Creature: ${render.subtype}`,
+        `HP: ${render.hp ?? "?"}/${render.maxHp ?? "?"}`,
+        `State: ${render.behaviorState ?? "idle"}`,
+        `Tile: (${render.x}, ${render.y})`
+      ];
     });
 
     return render;
@@ -810,6 +824,9 @@ export class IsometricScene extends Phaser.Scene {
       render.x = entity.x;
       render.y = entity.y;
       render.quantity = entity.quantity;
+      render.hp = entity.hp;
+      render.maxHp = entity.maxHp;
+      render.behaviorState = entity.behaviorState;
       this.positionEntityRender(render);
     }
 

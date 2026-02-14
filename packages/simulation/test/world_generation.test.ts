@@ -69,4 +69,14 @@ describe("world_generation", () => {
     expect(average).toBeGreaterThan(10);
     expect(Math.min(...counts)).toBeGreaterThan(2);
   });
+
+  it("does not spawn creatures too close to the actor at world creation", () => {
+    const state = createInitialState(88001, 64, 64, content);
+    const distances = state.entities
+      .filter((entity) => entity.type === "creature")
+      .map((entity) => Math.abs(entity.x - state.actor.x) + Math.abs(entity.y - state.actor.y));
+
+    const nearest = distances.length > 0 ? Math.min(...distances) : Infinity;
+    expect(nearest).toBeGreaterThan(8);
+  });
 });

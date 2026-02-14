@@ -18,6 +18,11 @@ export const gatherActionSchema = z.object({
   targetId: z.string().min(1)
 });
 
+export const attackActionSchema = z.object({
+  type: z.literal("attack"),
+  targetId: z.string().min(1)
+});
+
 export const craftActionSchema = z.object({
   type: z.literal("craft"),
   recipeId: z.string().min(1)
@@ -39,6 +44,7 @@ export const agentActionSchema = z.discriminatedUnion("type", [
   moveActionSchema,
   interactActionSchema,
   gatherActionSchema,
+  attackActionSchema,
   craftActionSchema,
   placeActionSchema,
   waitActionSchema
@@ -78,7 +84,7 @@ export const agentTurnOutputJsonSchema = {
           "ticks"
         ],
         properties: {
-          type: { enum: ["move", "interact", "gather", "craft", "place", "wait"] },
+          type: { enum: ["move", "interact", "gather", "attack", "craft", "place", "wait"] },
           direction: { enum: ["N", "NE", "E", "SE", "S", "SW", "W", "NW", null] },
           steps: { enum: [1, 2, 3, null] },
           targetId: { type: ["string", "null"] },

@@ -56,6 +56,8 @@ export default function App() {
   const [latencyMs, setLatencyMs] = useState<number>(0);
   const [tick, setTick] = useState<number>(0);
   const [stamina, setStamina] = useState<number>(0);
+  const [hp, setHp] = useState<number>(0);
+  const [maxHp, setMaxHp] = useState<number>(0);
   const [inventory, setInventory] = useState<Record<string, number>>({});
   const [nearbyResources, setNearbyResources] = useState<Array<{ id: string; subtype: string; quantity: number; distance: number }>>([]);
   const [catalog, setCatalog] = useState<{ prefabs: CatalogPrefab[]; recipes: CatalogRecipe[] }>({
@@ -159,6 +161,8 @@ export default function App() {
           if (message.payload.phase === "idle") {
             setTick(0);
             setStamina(0);
+            setHp(0);
+            setMaxHp(0);
             setInventory({});
             setNearbyResources([]);
             sceneRef.current?.clearSnapshot();
@@ -190,6 +194,8 @@ export default function App() {
 
           setTick(message.payload.tick);
           setStamina(message.payload.actor.stamina);
+          setHp(message.payload.actor.hp);
+          setMaxHp(message.payload.actor.maxHp);
           setInventory(message.payload.inventory);
           setCatalog(message.payload.catalog);
           setNearbyResources(resources);
@@ -453,6 +459,9 @@ export default function App() {
               <h3>Agent</h3>
               <p>Tick: {tick}</p>
               <p>Stamina: {stamina}</p>
+              <p>
+                HP: {hp}/{maxHp}
+              </p>
             </div>
 
             <div className="hud-card">
