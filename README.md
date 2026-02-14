@@ -1,3 +1,5 @@
+![CodexGame](assets/HBDjPxTXcAAuv4y.jpeg)
+
 # CodexGame
 
 Self-playing isometric sandbox RPG driven by Codex agents via `codex app-server`.
