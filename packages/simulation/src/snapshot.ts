@@ -112,6 +112,9 @@ export function buildPromptContext(snapshot: WorldSnapshot, agentId: string): st
     }));
   const nearbyAllies = peers.filter((peer) => peer.alive && allyIds.has(peer.id) && distance(self?.x ?? 0, self?.y ?? 0, peer.x, peer.y) <= 3).length;
   const nearbyEnemies = peers.filter((peer) => peer.alive && enemyIds.has(peer.id) && distance(self?.x ?? 0, self?.y ?? 0, peer.x, peer.y) <= 3).length;
+  const nearbyNeutralPeers = peers.filter(
+    (peer) => peer.alive && peer.relation === "neutral" && distance(self?.x ?? 0, self?.y ?? 0, peer.x, peer.y) <= 3
+  ).length;
   const milestones: string[] = [];
   if ((self?.scoreTrack.crafts ?? 0) < 1) {
     milestones.push("Craft at least one useful item soon.");
@@ -121,6 +124,12 @@ export function buildPromptContext(snapshot: WorldSnapshot, agentId: string): st
   }
   if ((self?.relations.allies.length ?? 0) > 0 && (self?.scoreTrack.cooperativeTalks ?? 0) < 2) {
     milestones.push("Send a concrete coordination update to an ally.");
+  }
+  if (nearbyNeutralPeers > 0) {
+    milestones.push("Open contact with a nearby neutral agent: talk first, then set_relation deliberately (ally or enemy) when justified.");
+  }
+  if ((self?.inbox ?? []).length > 0) {
+    milestones.push("Respond to recent inbox messages with clear intent or negotiation.");
   }
   if ((self?.scoreTrack.idleStreak ?? 0) >= 2) {
     milestones.push("Break idle loop: prefer gather/craft/place/inspect over repeated wait/interact.");
@@ -138,21 +147,23 @@ export function buildPromptContext(snapshot: WorldSnapshot, agentId: string): st
       self: self ?? null,
       scoreGuidance: {
         weights: {
-          survival: 0.6,
-          progression: 0.3,
-          social: 0.1
+          survival: 0.5,
+          progression: 0.25,
+          social: 0.25
         },
         goals: [
           "Prioritize survival and low-risk positioning.",
           "Progress by gathering/crafting/placing to improve progression score.",
-          "Cooperate with allies using meaningful talk updates.",
-          "Use social actions strategically; aggression should be conditional, not default.",
+          "Use social actions each cycle when peers are nearby: talk, inspect, and set_relation with intent.",
+          "Cooperate with allies using meaningful talk updates and explicit role alignment.",
+          "Use conditional combat against declared enemies when advantage is clear; avoid random aggression.",
           "Avoid repeating wait/interact when better actions are available."
         ]
       },
       tacticalHints: {
         nearbyAllies,
         nearbyEnemies,
+        nearbyNeutralPeers,
         recommendedActionBias: "gather over interact for resources"
       },
       milestones,

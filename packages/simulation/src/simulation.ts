@@ -20,9 +20,9 @@ const CREATURE_MOVE_TICK_INTERVAL = 6;
 const CREATURE_ATTACK_TICK_INTERVAL = 12;
 const CREATURE_AGGRO_GRACE_TICKS = 24;
 const MAX_CREATURE_ATTACKERS_PER_TICK = 2;
-const SCORE_SURVIVAL_WEIGHT = 0.6;
-const SCORE_PROGRESSION_WEIGHT = 0.3;
-const SCORE_SOCIAL_WEIGHT = 0.1;
+const SCORE_SURVIVAL_WEIGHT = 0.5;
+const SCORE_PROGRESSION_WEIGHT = 0.25;
+const SCORE_SOCIAL_WEIGHT = 0.25;
 
 function addInventory(inventory: Record<string, number>, item: string, count: number): void {
   inventory[item] = (inventory[item] ?? 0) + count;
@@ -92,12 +92,14 @@ function recomputeAgentScores(state: SimulationState): void {
     const enemyNear = state.agents.filter(
       (other) => other.id !== agent.id && other.alive && agent.relations[other.id] === "enemy" && manhattanDistance(agent.x, agent.y, other.x, other.y) <= 2
     ).length;
+    const explicitRelations = Object.values(agent.relations).filter((relation) => relation !== "neutral").length;
     const socialEvents =
-      agent.scoreTrack.enemyAgentKills * 4 +
-      agent.scoreTrack.successfulLoots * 2 +
-      agent.scoreTrack.cooperativeTalks * 0.75 +
-      agent.scoreTrack.tacticalInspects * 0.75;
-    const socialPositioning = allyNear * 1 - enemyNear * 0.5;
+      agent.scoreTrack.enemyAgentKills * 3 +
+      agent.scoreTrack.successfulLoots * 1.5 +
+      agent.scoreTrack.cooperativeTalks * 1.25 +
+      agent.scoreTrack.tacticalInspects * 1 +
+      explicitRelations * 0.5;
+    const socialPositioning = allyNear * 1.25 - enemyNear * 0.25;
     const social = clamp(socialEvents + socialPositioning, 0, 10);
 
     const total = survival * SCORE_SURVIVAL_WEIGHT + progression * SCORE_PROGRESSION_WEIGHT + social * SCORE_SOCIAL_WEIGHT;
@@ -539,7 +541,9 @@ export class Simulation {
         if (recipient.inbox.length > 20) {
           recipient.inbox = recipient.inbox.slice(-20);
         }
-        if (agent.relations[recipient.id] === "ally") {
+        const normalizedMessage = action.message.trim().toLowerCase();
+        const looksMeaningful = normalizedMessage.length >= 12;
+        if (looksMeaningful) {
           agent.scoreTrack.cooperativeTalks += 1;
         }
         agent.scoreTrack.idleStreak = 0;

@@ -113,4 +113,38 @@ describe("scoring", () => {
     expect(a1.scoreTrack.idleStreak).toBeGreaterThan(0);
     expect(a1.score.progression).toBeLessThanOrEqual(progressionBeforeIdle);
   });
+
+  it("rewards first-contact talk and explicit relation alignment", () => {
+    const simulation = new Simulation(904, 12, 12, content, [
+      { id: "agent-1", name: "Agent 1" },
+      { id: "agent-2", name: "Agent 2" }
+    ]);
+    flattenToPlains(simulation);
+    const state = simulation.getState();
+    const a1 = state.agents.find((agent) => agent.id === "agent-1")!;
+    const a2 = state.agents.find((agent) => agent.id === "agent-2")!;
+    a1.x = 6;
+    a1.y = 6;
+    a2.x = 7;
+    a2.y = 6;
+
+    const socialBeforeTalk = a1.score.social;
+    const talk = simulation.applyAction("agent-1", {
+      type: "talk",
+      toAgentId: "agent-2",
+      message: "Let's align tasks: I gather wood while you scout fiber."
+    });
+    expect(talk.result).toBe("applied");
+    expect(a1.scoreTrack.cooperativeTalks).toBe(1);
+    expect(a1.score.social).toBeGreaterThan(socialBeforeTalk);
+
+    const socialBeforeRelation = a1.score.social;
+    const relation = simulation.applyAction("agent-1", {
+      type: "set_relation",
+      targetAgentId: "agent-2",
+      relation: "ally"
+    });
+    expect(relation.result).toBe("applied");
+    expect(a1.score.social).toBeGreaterThanOrEqual(socialBeforeRelation);
+  });
 });
